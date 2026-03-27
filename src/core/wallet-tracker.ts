@@ -1,0 +1,193 @@
+// src/core/wallet-tracker.ts
+//
+// v3: Автоматическое обнаружение прибыльных кошельков из gRPC потока.
+// Отслеживает buy/sell каждого кошелька, вычисляет win rate,
+// генерирует copy-trade сигналы для eligible кошельков.
+//
+// Работает полностью в фоне — не влияет на торговлю пока
+// config.strategy.copyTrade.enabled = false.
+
+import fs from 'fs/promises';
+import path from 'path';
+import { logger } from '../utils/logger';
+import { logEvent } from '../utils/event-logger';
+import { config } from '../config';
+
+const TRACKER_FILE = path.join(process.cwd(), 'data', 'wallet-tracker.json');
+
+interface WalletTrade {
+  mint: string;
+  buySolLamports: number;
+  buyTimestamp: number;
+  sold: boolean;
+}
+
+interface WalletStats {
+  address: string;
+  trades: WalletTrade[];
+  completedTrades: number;
+  wins: number;
+  lastSeen: number;
+  isCopyEligible: boolean;
+}
+
+export class WalletTracker {
+  private wallets: Map<string, WalletStats> = new Map();
+  private saveTimer: NodeJS.Timeout | null = null;
+  private dirty = false;
+  private readonly MAX_WALLETS: number;
+  private readonly MAX_TRADES_PER_WALLET = 20;
+  private readonly MIN_COMPLETED: number;
+  private readonly MIN_WIN_RATE: number;
+  private readonly SAVE_INTERVAL: number;
+  private readonly MIN_COPY_SOL: number;
+
+  constructor() {
+    const wt = config.walletTracker ?? {} as any;
+    this.MAX_WALLETS = wt.maxTrackedWallets ?? 2000;
+    this.MIN_COMPLETED = wt.minCompletedTrades ?? 5;
+    this.MIN_WIN_RATE = wt.minWinRate ?? 0.55;
+    this.SAVE_INTERVAL = wt.saveIntervalMs ?? 5 * 60 * 1000;
+    this.MIN_COPY_SOL = wt.minCopyBuySolLamports ?? 100_000_000;
+  }
+
+  async start(): Promise<void> {
+    await this.load();
+    this.saveTimer = setInterval(() => this.save(), this.SAVE_INTERVAL);
+    const eligible = [...this.wallets.values()].filter(w => w.isCopyEligible).length;
+    logger.info(`WalletTracker started: ${this.wallets.size} wallets, ${eligible} copy-eligible`);
+  }
+
+  async stop(): Promise<void> {
+    if (this.saveTimer) { clearInterval(this.saveTimer); this.saveTimer = null; }
+    await this.save();
+    logger.info(`WalletTracker stopped: ${this.wallets.size} wallets saved`);
+  }
+
+  /** Записать покупку кошелька */
+  recordBuy(wallet: string, mint: string, solLamports: number): void {
+    if (solLamports < 30_000_000) return; // < 0.03 SOL — dust/bot, игнорируем
+    let stats = this.wallets.get(wallet);
+    if (!stats) {
+      if (this.wallets.size >= this.MAX_WALLETS) this.evictOldest();
+      stats = {
+        address: wallet, trades: [], completedTrades: 0,
+        wins: 0, lastSeen: Date.now(), isCopyEligible: false,
+      };
+      this.wallets.set(wallet, stats);
+    }
+    // Не дублировать открытую позицию для того же mint
+    if (stats.trades.some(t => t.mint === mint && !t.sold)) return;
+    // Ограничить количество trades в памяти
+    if (stats.trades.length >= this.MAX_TRADES_PER_WALLET) {
+      const idx = stats.trades.findIndex(t => t.sold);
+      if (idx >= 0) stats.trades.splice(idx, 1); else return;
+    }
+    stats.trades.push({ mint, buySolLamports: solLamports, buyTimestamp: Date.now(), sold: false });
+    stats.lastSeen = Date.now();
+    this.dirty = true;
+  }
+
+  /** Записать продажу кошелька и обновить win/loss статистику */
+  recordSell(wallet: string, mint: string): void {
+    const stats = this.wallets.get(wallet);
+    if (!stats) return;
+    const trade = stats.trades.find(t => t.mint === mint && !t.sold);
+    if (!trade) return;
+
+    trade.sold = true;
+    stats.completedTrades++;
+    // Heuristic: удержал > 3 сек = скорее win (instant dump = loss)
+    const holdTime = Date.now() - trade.buyTimestamp;
+    if (holdTime > 3000) stats.wins++;
+    stats.lastSeen = Date.now();
+
+    // Пересчитать eligible статус
+    const wasEligible = stats.isCopyEligible;
+    const winRate = stats.completedTrades > 0 ? stats.wins / stats.completedTrades : 0;
+    stats.isCopyEligible = stats.completedTrades >= this.MIN_COMPLETED && winRate >= this.MIN_WIN_RATE;
+
+    if (!wasEligible && stats.isCopyEligible) {
+      logger.info(`🎯 COPY-ELIGIBLE: ${wallet.slice(0, 8)}... WR=${(winRate * 100).toFixed(0)}% trades=${stats.completedTrades}`);
+      logEvent('WALLET_ELIGIBLE', { wallet: wallet.slice(0, 8), winRate: +(winRate.toFixed(2)), trades: stats.completedTrades });
+    }
+    this.dirty = true;
+  }
+
+  /** Проверить, является ли покупка copy-trade сигналом */
+  isCopySignal(wallet: string, solLamports: number): boolean {
+    const stats = this.wallets.get(wallet);
+    if (!stats || !stats.isCopyEligible) return false;
+    return solLamports >= this.MIN_COPY_SOL;
+  }
+
+  /** Очистка старых данных (вызывается из cleanSeenMints раз в час) */
+  cleanup(): void {
+    const now = Date.now();
+    const INACTIVE_TTL = 24 * 60 * 60 * 1000;          // 24ч для обычных
+    const ELIGIBLE_INACTIVE_TTL = 3 * 24 * 60 * 60 * 1000; // 3 дня для eligible
+    for (const [addr, stats] of this.wallets) {
+      // Удалить незавершённые trades старше 10 минут
+      stats.trades = stats.trades.filter(t => t.sold || now - t.buyTimestamp < 10 * 60 * 1000);
+      // Удалить неактивные кошельки (eligible тоже, но с бОльшим TTL)
+      const ttl = stats.isCopyEligible ? ELIGIBLE_INACTIVE_TTL : INACTIVE_TTL;
+      if (now - stats.lastSeen > ttl) {
+        if (stats.isCopyEligible) {
+          logger.info(`🗑️ Eligible wallet ${addr.slice(0,8)} inactive for 7d — removing`);
+        }
+        this.wallets.delete(addr);
+      }
+    }
+  }
+
+  private evictOldest(): void {
+    let oldest: string | null = null;
+    let oldestTime = Infinity;
+    for (const [addr, stats] of this.wallets) {
+      if (stats.isCopyEligible) continue; // не вытесняем eligible
+      if (stats.lastSeen < oldestTime) { oldestTime = stats.lastSeen; oldest = addr; }
+    }
+    if (oldest) this.wallets.delete(oldest);
+  }
+
+  private async save(): Promise<void> {
+    if (!this.dirty) return;
+    try {
+      // Сохраняем только кошельки с >= 2 trades или eligible
+      const data = [...this.wallets.values()]
+        .filter(s => s.completedTrades >= 2 || s.isCopyEligible)
+        .map(s => ({
+          address: s.address,
+          completedTrades: s.completedTrades,
+          wins: s.wins,
+          lastSeen: s.lastSeen,
+          isCopyEligible: s.isCopyEligible,
+        }));
+      await fs.mkdir(path.dirname(TRACKER_FILE), { recursive: true });
+      await fs.writeFile(TRACKER_FILE, JSON.stringify(data, null, 2), 'utf8');
+      this.dirty = false;
+    } catch (err) {
+      logger.error('WalletTracker save error:', err);
+    }
+  }
+
+  private async load(): Promise<void> {
+    try {
+      const raw = await fs.readFile(TRACKER_FILE, 'utf8');
+      for (const item of JSON.parse(raw)) {
+        this.wallets.set(item.address, {
+          address: item.address,
+          trades: [],
+          completedTrades: item.completedTrades ?? 0,
+          wins: item.wins ?? 0,
+          lastSeen: item.lastSeen ?? 0,
+          isCopyEligible: item.isCopyEligible ?? false,
+        });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.error('WalletTracker load error:', err);
+      }
+    }
+  }
+}

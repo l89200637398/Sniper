@@ -1,0 +1,192 @@
+/**
+ * test-pumpswap.ts v4 — использует getProgramAccounts для поиска пула
+ * Работает с любым пулом (canonical и нестандартным)
+ * Запуск: npx ts-node src/test-pumpswap.ts <mint>
+ */
+import {
+  Connection, Keypair, PublicKey, SystemProgram, ComputeBudgetProgram,
+  VersionedTransaction, TransactionMessage,
+} from '@solana/web3.js';
+import {
+  getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction, createSyncNativeInstruction,
+} from '@solana/spl-token';
+import bs58 from 'bs58'; import dotenv from 'dotenv'; dotenv.config();
+import { config }          from './config';
+import { parsePoolAccount, buildBuyInstruction, buildSellInstruction } from './trading/pumpSwap';
+import { DISCRIMINATOR }                from './constants';
+
+const PSWAP   = new PublicKey('pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA');
+const WSOL    = new PublicKey(config.wsolMint);
+const FEE_PR  = new PublicKey('pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ');
+function u16le(n: number) { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; }
+function getGlobalConfigPDA() { return PublicKey.findProgramAddressSync([Buffer.from('global_config')], PSWAP)[0]; }
+function getEventAuthPDA()    { return PublicKey.findProgramAddressSync([Buffer.from('__event_authority')], PSWAP)[0]; }
+function getGlobalVolPDA()    { return PublicKey.findProgramAddressSync([Buffer.from('global_volume_accumulator')], PSWAP)[0]; }
+function getUserVolPDA(u: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from('user_volume_accumulator'), u.toBuffer()], PSWAP)[0]; }
+function getVaultAuthPDA(c: PublicKey) { return PublicKey.findProgramAddressSync([Buffer.from('creator_vault'), c.toBuffer()], PSWAP)[0]; }
+function getFeeConfigPDA() { return PublicKey.findProgramAddressSync([Buffer.from('fee_config'), PSWAP.toBuffer()], FEE_PR)[0]; }
+
+async function getFeeRecipients(conn: Connection) {
+  const acc = await conn.getAccountInfo(getGlobalConfigPDA());
+  if (!acc) throw new Error('GlobalConfig not found');
+  return Array.from({ length: 8 }, (_, i) => new PublicKey(acc.data.subarray(57 + i*32, 57 + (i+1)*32)));
+}
+
+function sep(t: string) { console.log(`\n${'─'.repeat(65)}\n  ${t}\n${'─'.repeat(65)}`); }
+
+async function main() {
+  const mintStr = process.argv[2];
+  if (!mintStr) { console.error('Usage: npx ts-node src/test-pumpswap.ts <mint>'); process.exit(1); }
+  const connection = new Connection(config.rpc.url, 'processed');
+  const payer      = Keypair.fromSecretKey(bs58.decode(config.wallet.privateKey));
+  const mint       = new PublicKey(mintStr);
+  const owner      = payer.publicKey;
+
+  console.log(`\n🧪 PumpSwap Test v4 (getProgramAccounts pool discovery)`);
+  console.log(`   Mint: ${mint.toBase58()}`);
+
+  // 1. Find pool via getProgramAccounts
+  sep('1. Pool discovery via getProgramAccounts');
+  let pool: PublicKey | null = null;
+  let poolData: Buffer | null = null;
+
+  for (const offset of [43, 75]) {
+    const accounts = await connection.getProgramAccounts(PSWAP, {
+      commitment: 'confirmed',
+      filters: [{ memcmp: { offset, bytes: mint.toBase58() } }],
+    });
+    if (accounts.length > 0) {
+      pool     = accounts[0].pubkey;
+      poolData = accounts[0].account.data;
+      console.log(`   ✅ Pool found at offset ${offset}: ${pool.toBase58()} (${poolData.length} bytes)`);
+      break;
+    }
+  }
+
+  if (!pool || !poolData) {
+    console.error('   ❌ Pool NOT FOUND in PumpSwap program accounts');
+    console.log('   Token may be on Raydium or not graduated yet');
+    process.exit(1);
+  }
+
+  // 2. Parse pool
+  sep('2. Pool account data');
+  const poolState = parsePoolAccount(poolData);
+  console.log(`   baseMint:  ${poolState.baseMint.toBase58()}`);
+  console.log(`   quoteMint: ${poolState.quoteMint.toBase58()}`);
+  console.log(`   poolBase:  ${poolState.poolBaseTokenAccount.toBase58()}`);
+  console.log(`   poolQuote: ${poolState.poolQuoteTokenAccount.toBase58()}`);
+  console.log(`   coinCreator: ${poolState.coinCreator?.toBase58() ?? 'null'}`);
+
+  // Determine which is token, which is wSOL
+  const tokenIsBase  = poolState.baseMint.equals(mint);
+  const tokenIsQuote = poolState.quoteMint.equals(mint);
+  if (!tokenIsBase && !tokenIsQuote) { console.error('   ❌ Mint not found in pool'); process.exit(1); }
+  console.log(`\n   Token position: ${tokenIsBase ? 'base' : 'quote'}`);
+  console.log(`   wSOL position:  ${tokenIsBase ? 'quote' : 'base'}`);
+
+  // 3. Reserves
+  sep('3. Reserves');
+  const memeVault = tokenIsBase ? poolState.poolBaseTokenAccount : poolState.poolQuoteTokenAccount;
+  const solVault  = tokenIsBase ? poolState.poolQuoteTokenAccount : poolState.poolBaseTokenAccount;
+  const [memeBal, solBal] = await Promise.all([
+    connection.getTokenAccountBalance(memeVault),
+    connection.getTokenAccountBalance(solVault),
+  ]);
+  const tokenReserve = BigInt(memeBal.value.amount);
+  const solReserve   = BigInt(solBal.value.amount);
+  console.log(`   Token reserve: ${memeBal.value.uiAmountString}`);
+  console.log(`   wSOL reserve:  ${Number(solReserve)/1e9} SOL`);
+  if (solReserve === 0n) { console.error('   ❌ No wSOL liquidity'); process.exit(1); }
+
+  // 4. User ATAs
+  sep('4. User ATAs');
+  const mintInfo = await connection.getAccountInfo(mint);
+  const baseTokenProg = mintInfo!.owner;
+  const userMemeAta = getAssociatedTokenAddressSync(mint, owner, false, baseTokenProg);
+  const userWsolAta = getAssociatedTokenAddressSync(WSOL, owner, false, TOKEN_PROGRAM_ID);
+  console.log(`   userMemeAta: ${userMemeAta.toBase58()}`);
+  console.log(`   userWsolAta: ${userWsolAta.toBase58()}`);
+  let tokenBalance = 0n;
+  const memeInfo = await connection.getAccountInfo(userMemeAta).catch(() => null);
+  if (memeInfo) { const b = await connection.getTokenAccountBalance(userMemeAta).catch(() => null); tokenBalance = b ? BigInt(b.value.amount) : 0n; console.log(`   Token balance: ${tokenBalance}`); }
+
+  // 5. Creator vault & fee
+  sep('5. Creator vault & fee recipient (both in wSOL)');
+  const recipients      = await getFeeRecipients(connection);
+  const feeRecipient    = recipients[0];
+  const feeWsolAta      = getAssociatedTokenAddressSync(WSOL, feeRecipient, true, TOKEN_PROGRAM_ID);
+  const coinCreator     = poolState.coinCreator ?? PublicKey.default;
+  const vaultAuth       = getVaultAuthPDA(coinCreator);
+  const vaultAta        = getAssociatedTokenAddressSync(WSOL, vaultAuth, true, TOKEN_PROGRAM_ID);
+  console.log(`   feeRecipientWsolAta: ${feeWsolAta.toBase58()}`);
+  console.log(`   creatorVaultAta (wSOL): ${vaultAta.toBase58()}`);
+
+  // 6. Build BOT BUY instruction
+  sep('6. BOT BUY (IDL buy, disc 66063d12, 23 accounts)');
+  const accs = {
+    pool, user: owner,
+    baseMint: poolState.baseMint, quoteMint: poolState.quoteMint,
+    userBaseTokenAccount:  tokenIsBase ? userMemeAta : userWsolAta,
+    userQuoteTokenAccount: tokenIsBase ? userWsolAta : userMemeAta,
+    poolBaseTokenAccount:  poolState.poolBaseTokenAccount,
+    poolQuoteTokenAccount: poolState.poolQuoteTokenAccount,
+    protocolFeeRecipient: feeRecipient,
+    protocolFeeRecipientTokenAccount: feeWsolAta,
+    baseTokenProgram: tokenIsBase ? baseTokenProg : TOKEN_PROGRAM_ID,
+    quoteTokenProgram: tokenIsBase ? TOKEN_PROGRAM_ID : baseTokenProg,
+    coinCreatorVaultAta: vaultAta, coinCreatorVaultAuthority: vaultAuth,
+  };
+
+  const FEE = 30n, solIn = BigInt(Math.floor(0.001*1e9));
+  const aft = solIn*(10000n-FEE);
+  const expTok = (aft*tokenReserve)/(solReserve*10000n+aft);
+  const minTok = (expTok*9700n)/10000n;
+  const maxSol = (solIn*10300n)/10000n;
+
+  // For IDL buy: base_amount_out = token amount, max_quote_amount_in = wSOL
+  // If token is base: buy(tokenOut, maxSolIn) — standard
+  // If token is quote: sell(solIn, minTokenOut) — inverted
+  let buyIx: import('@solana/web3.js').TransactionInstruction;
+  if (tokenIsBase) {
+    buyIx = buildBuyInstruction(accs, minTok, maxSol, owner);
+    console.log(`   IDL: buy(base_amount_out=${minTok}, max_quote_amount_in=${maxSol})`);
+  } else {
+    // token is quote → we "sell" base(wSOL) to get quote(token) → IDL sell
+    buyIx = buildSellInstruction(accs, solIn, minTok);
+    console.log(`   IDL: sell(base_amount_in=${solIn}, min_quote_amount_out=${minTok})`);
+  }
+  console.log(`   Account count: ${buyIx.keys.length}`);
+  console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
+
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const fee = 100_000; // default priority fee for test
+  const memeAtaIx = createAssociatedTokenAccountIdempotentInstruction(owner, userMemeAta, owner, mint, baseTokenProg);
+  const wsolAtaIx = createAssociatedTokenAccountIdempotentInstruction(owner, userWsolAta, owner, WSOL, TOKEN_PROGRAM_ID);
+  const buyMsg = new TransactionMessage({
+    payerKey: owner, recentBlockhash: blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: fee }),
+      memeAtaIx, wsolAtaIx,
+      SystemProgram.transfer({ fromPubkey: owner, toPubkey: userWsolAta, lamports: solIn }),
+      createSyncNativeInstruction(userWsolAta),
+      buyIx,
+    ],
+  }).compileToV0Message();
+  const buyTx = new VersionedTransaction(buyMsg); buyTx.sign([payer]);
+  console.log('\n   Simulating...');
+  const sim = await connection.simulateTransaction(buyTx, { sigVerify: false });
+  if (sim.value.err) {
+    console.error(`   ❌ FAIL: ${JSON.stringify(sim.value.err)}`);
+    sim.value.logs?.forEach(l => console.error('     '+l));
+  } else { console.log(`   ✅ OK (units: ${sim.value.unitsConsumed})`); }
+
+  sep('Summary');
+  console.log(`   Pool discovery: ✅`);
+  console.log(`   Simulation: ${!sim.value.err ? '✅ PASS' : '❌ FAIL'}`);
+  if (!sim.value.err) console.log('\n✅ Ready to trade!');
+}
+
+main().catch(e => { console.error('💥', e); process.exit(1); });
