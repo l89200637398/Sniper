@@ -79,6 +79,21 @@ async function main() {
   console.log(`   poolQuote: ${poolState.poolQuoteTokenAccount.toBase58()}`);
   console.log(`   coinCreator: ${poolState.coinCreator?.toBase58() ?? 'null'}`);
 
+  // Dump remaining pool bytes after coinCreator (offset 243+) — check for cashback/new fields
+  if (poolData.length > 243) {
+    const remaining = poolData.subarray(243);
+    console.log(`\n   Pool data after coinCreator (offset 243, ${remaining.length} bytes):`);
+    console.log(`   Hex: ${remaining.toString('hex')}`);
+    console.log(`   [243] is_mayhem_mode: ${remaining[0]}`);
+    if (remaining.length > 1) console.log(`   [244] unknown_1: ${remaining[1]}`);
+    if (remaining.length > 2) console.log(`   [245] unknown_2: ${remaining[2]}`);
+    if (remaining.length > 8) console.log(`   [244-251] as u64: ${remaining.readBigUInt64LE(1)}`);
+    if (remaining.length > 16) console.log(`   [252-259] as u64: ${remaining.readBigUInt64LE(9)}`);
+    if (remaining.length > 24) console.log(`   [260-267] as u64: ${remaining.readBigUInt64LE(17)}`);
+    if (remaining.length > 32) console.log(`   [268-275] as pubkey: ${new PublicKey(remaining.subarray(25, 57)).toBase58()}`);
+    if (remaining.length > 57) console.log(`   [300] last_byte: ${remaining[remaining.length - 1]}`);
+  }
+
   // Determine which is token, which is wSOL
   const tokenIsBase  = poolState.baseMint.equals(mint);
   const tokenIsQuote = poolState.quoteMint.equals(mint);
