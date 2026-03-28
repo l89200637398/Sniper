@@ -146,12 +146,15 @@ async function main() {
   const maxSol = (solIn*10300n)/10000n;
 
   // For IDL buy: base_amount_out = token amount, max_quote_amount_in = wSOL
+  // Token-2022 with transfer fee: base_amount_out = 1n to avoid Overflow (6023)
   // If token is base: buy(tokenOut, maxSolIn) — standard
   // If token is quote: sell(solIn, minTokenOut) — inverted
+  const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
+  const buyTokenAmount = isToken2022 ? 1n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
-    buyIx = buildBuyInstruction(accs, minTok, maxSol, owner);
-    console.log(`   IDL: buy(base_amount_out=${minTok}, max_quote_amount_in=${maxSol})`);
+    buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner);
+    console.log(`   IDL: buy(base_amount_out=${buyTokenAmount}${isToken2022 ? ' [Token-2022 workaround]' : ''}, max_quote_amount_in=${maxSol})`);
   } else {
     // token is quote → we "sell" base(wSOL) to get quote(token) → IDL sell
     buyIx = buildSellInstruction(accs, solIn, minTok);

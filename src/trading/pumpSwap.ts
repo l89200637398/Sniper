@@ -490,6 +490,7 @@ export async function buyTokenPumpSwap(
   const minTokensOut    = computeMinOut(expectedTokens, slippageBps, tokenReserve);
   const maxSolIn        = (solIn * BigInt(10000 + slippageBps)) / 10000n;
 
+  const isToken2022 = !accs.baseTokenProgram.equals(TOKEN_PROGRAM_ID);
   const wsolAta = accs.userQuoteTokenAccount;
   const memeAta = accs.userBaseTokenAccount;
 
@@ -509,7 +510,8 @@ export async function buyTokenPumpSwap(
       SystemProgram.transfer({ fromPubkey: owner, toPubkey: wsolAta, lamports: solIn }),
       createSyncNativeInstruction(wsolAta),
       // Bot BUY = IDL buy
-      buildBuyInstruction(accs, minTokensOut, maxSolIn, owner),
+      // Token-2022 with transfer fee: base_amount_out = 1n to avoid Overflow (6023)
+      buildBuyInstruction(accs, isToken2022 ? 1n : minTokensOut, maxSolIn, owner),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
