@@ -150,7 +150,8 @@ async function main() {
   // If token is base: buy(tokenOut, maxSolIn) — standard
   // If token is quote: sell(solIn, minTokenOut) — inverted
   const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
-  const buyTokenAmount = isToken2022 ? 1n : minTok;
+  // Token-2022: use 0n to bypass all base_amount checks in program
+  const buyTokenAmount = isToken2022 ? 0n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
     buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner);
