@@ -145,7 +145,7 @@ async function main() {
   console.log(`   creatorVaultAta: ${vaultAta.toBase58()}`);
 
   // 6. Build BOT BUY instruction
-  sep('6. BOT BUY (IDL buy, disc 66063d12, 23 accounts)');
+  sep('6. BOT BUY (IDL buy, disc 66063d12, 24 accounts + poolV2 PDA)');
   const accs = {
     pool, user: owner,
     baseMint: poolState.baseMint, quoteMint: poolState.quoteMint,
@@ -183,6 +183,7 @@ async function main() {
   }
   console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
+  console.log(`   Data size: ${buyIx.data.length} bytes (should be 25 with track_volume)`);
   console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
   console.log(`\n   Account keys:`);
   buyIx.keys.forEach((k, i) => console.log(`     [${i.toString().padStart(2)}] ${k.pubkey.toBase58().substring(0,20)}... ${k.isSigner ? 'S' : '-'}${k.isWritable ? 'W' : '-'}`));
