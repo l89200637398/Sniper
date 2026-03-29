@@ -128,15 +128,21 @@ async function main() {
   if (memeInfo) { const b = await connection.getTokenAccountBalance(userMemeAta).catch(() => null); tokenBalance = b ? BigInt(b.value.amount) : 0n; console.log(`   Token balance: ${tokenBalance}`); }
 
   // 5. Creator vault & fee
-  sep('5. Creator vault & fee recipient (both in wSOL)');
+  sep('5. Creator vault & fee recipient (using pool quoteMint)');
   const recipients      = await getFeeRecipients(connection);
   const feeRecipient    = recipients[0];
-  const feeWsolAta      = getAssociatedTokenAddressSync(WSOL, feeRecipient, true, TOKEN_PROGRAM_ID);
+  // Determine quote token program
+  const quoteMint       = poolState.quoteMint;
+  const quoteMintInfo   = await connection.getAccountInfo(quoteMint);
+  const quoteTokenProg  = quoteMintInfo!.owner;
+  const feeAta          = getAssociatedTokenAddressSync(quoteMint, feeRecipient, true, quoteTokenProg);
   const coinCreator     = poolState.coinCreator ?? PublicKey.default;
   const vaultAuth       = getVaultAuthPDA(coinCreator);
-  const vaultAta        = getAssociatedTokenAddressSync(WSOL, vaultAuth, true, TOKEN_PROGRAM_ID);
-  console.log(`   feeRecipientWsolAta: ${feeWsolAta.toBase58()}`);
-  console.log(`   creatorVaultAta (wSOL): ${vaultAta.toBase58()}`);
+  const vaultAta        = getAssociatedTokenAddressSync(quoteMint, vaultAuth, true, quoteTokenProg);
+  console.log(`   quoteMint: ${quoteMint.toBase58()}`);
+  console.log(`   quoteTokenProgram: ${quoteTokenProg.toBase58()}`);
+  console.log(`   feeRecipientAta: ${feeAta.toBase58()}`);
+  console.log(`   creatorVaultAta: ${vaultAta.toBase58()}`);
 
   // 6. Build BOT BUY instruction
   sep('6. BOT BUY (IDL buy, disc 66063d12, 23 accounts)');
@@ -148,9 +154,9 @@ async function main() {
     poolBaseTokenAccount:  poolState.poolBaseTokenAccount,
     poolQuoteTokenAccount: poolState.poolQuoteTokenAccount,
     protocolFeeRecipient: feeRecipient,
-    protocolFeeRecipientTokenAccount: feeWsolAta,
-    baseTokenProgram: tokenIsBase ? baseTokenProg : TOKEN_PROGRAM_ID,
-    quoteTokenProgram: tokenIsBase ? TOKEN_PROGRAM_ID : baseTokenProg,
+    protocolFeeRecipientTokenAccount: feeAta,
+    baseTokenProgram: tokenIsBase ? baseTokenProg : quoteTokenProg,
+    quoteTokenProgram: tokenIsBase ? quoteTokenProg : baseTokenProg,
     coinCreatorVaultAta: vaultAta, coinCreatorVaultAuthority: vaultAuth,
   };
 
@@ -165,8 +171,8 @@ async function main() {
   // If token is base: buy(tokenOut, maxSolIn) — standard
   // If token is quote: sell(solIn, minTokenOut) — inverted
   const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
-  // Token-2022: use 0n to bypass all base_amount checks in program
-  const buyTokenAmount = isToken2022 ? 0n : minTok;
+  // Token-2022 with transfer fee: use 1n as min to avoid Overflow in fee math
+  const buyTokenAmount = isToken2022 ? 1n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
     buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner);
@@ -176,8 +182,11 @@ async function main() {
     buyIx = buildSellInstruction(accs, solIn, minTok);
     console.log(`   IDL: sell(base_amount_in=${solIn}, min_quote_amount_out=${minTok})`);
   }
+  console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
   console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
+  console.log(`\n   Account keys:`);
+  buyIx.keys.forEach((k, i) => console.log(`     [${i.toString().padStart(2)}] ${k.pubkey.toBase58().substring(0,20)}... ${k.isSigner ? 'S' : '-'}${k.isWritable ? 'W' : '-'}`));
 
   const { blockhash } = await connection.getLatestBlockhash('confirmed');
   const fee = 100_000; // default priority fee for test
@@ -203,8 +212,29 @@ async function main() {
   } else { console.log(`   ✅ OK (units: ${sim.value.unitsConsumed})`); }
 
   sep('Summary');
+  console.log(`   Pool:          ${pool.toBase58()}`);
+  console.log(`   Token type:    ${isToken2022 ? 'Token-2022' : 'SPL Token'}`);
+  console.log(`   Quote mint:    ${quoteMint.toBase58()}${quoteMint.equals(WSOL) ? ' (wSOL)' : ' (NOT wSOL!)'}`);
+  console.log(`   Pool byte[244]:${poolData.length > 244 ? ' ' + poolData[244] : ' N/A'}`);
   console.log(`   Pool discovery: ✅`);
-  console.log(`   Simulation: ${!sim.value.err ? '✅ PASS' : '❌ FAIL'}`);
+  console.log(`   Simulation:    ${!sim.value.err ? '✅ PASS' : '❌ FAIL'}`);
+  if (sim.value.err) {
+    console.log(`\n   Error details: ${JSON.stringify(sim.value.err)}`);
+    // Extract program error code if present
+    const errStr = JSON.stringify(sim.value.err);
+    const codeMatch = errStr.match(/"Custom":(\d+)/);
+    if (codeMatch) {
+      const code = parseInt(codeMatch[1]);
+      const knownErrors: Record<number, string> = {
+        6001: 'ZeroBaseAmount — base_amount_out cannot be 0',
+        6023: 'Overflow — arithmetic overflow in fee/amount calculation',
+        2014: 'ConstraintTokenMint — wrong token mint for an ATA account',
+        2003: 'ConstraintMut — account not marked as mutable',
+        3012: 'AccountNotInitialized — ATA does not exist on-chain',
+      };
+      console.log(`   Error code ${code}: ${knownErrors[code] ?? 'Unknown'}`);
+    }
+  }
   if (!sim.value.err) console.log('\n✅ Ready to trade!');
 }
 
