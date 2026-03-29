@@ -248,12 +248,10 @@ export function buildBuyInstruction(
   maxSolIn:          bigint,   // макс wSOL к трате (с учётом слиппажа)
   user:              PublicKey,
 ): TransactionInstruction {
-  const trackVolume = Buffer.alloc(1, 0); // 0 = don't track volume (avoids u64 overflow in volume math)
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_BUY,   // 66063d12 = global:buy = BOT BUY MEME
-    encodeU64(tokenAmountOut),      // base_amount_out
+    encodeU64(tokenAmountOut),      // base_amount_out (minimum tokens, use 1n to avoid overflow)
     encodeU64(maxSolIn),            // max_quote_amount_in
-    trackVolume,                    // byte 24: track_volume flag (added late 2025)
   ]);
 
   const userVolumeAcc = getUserVolumeAccumulatorPDA(user);
@@ -278,7 +276,7 @@ export function buildBuyInstruction(
     { pubkey: PUMP_SWAP_PROGRAM,                     isSigner: false, isWritable: false }, // 16 self
     { pubkey: accs.coinCreatorVaultAta,              isSigner: false, isWritable: true  }, // 17 creator vault (wSOL)
     { pubkey: accs.coinCreatorVaultAuthority,        isSigner: false, isWritable: false }, // 18
-    { pubkey: CACHED_GLOBAL_VOLUME_ACC,              isSigner: false, isWritable: true  }, // 19 Aug 2025
+    { pubkey: CACHED_GLOBAL_VOLUME_ACC,              isSigner: false, isWritable: false }, // 19 (read-only per IDL)
     { pubkey: userVolumeAcc,                         isSigner: false, isWritable: true  }, // 20 Aug 2025
     { pubkey: CACHED_FEE_CONFIG,                     isSigner: false, isWritable: false }, // 21 Sep 2025
     { pubkey: FEE_PROGRAM,                           isSigner: false, isWritable: false }, // 22 Sep 2025
@@ -299,12 +297,10 @@ export function buildSellInstruction(
   tokenAmountIn:    bigint,   // мем токены к трате
   minSolOut:        bigint,   // мин wSOL к получению
 ): TransactionInstruction {
-  const trackVolume = Buffer.alloc(1, 0); // 0 = don't track volume (avoids u64 overflow)
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_SELL,  // 33e685a4 = global:sell = BOT SELL MEME
     encodeU64(tokenAmountIn),       // base_amount_in
     encodeU64(minSolOut),           // min_quote_amount_out
-    trackVolume,                    // byte 24: track_volume flag
   ]);
 
   const keys = [
@@ -516,8 +512,10 @@ export async function buyTokenPumpSwap(
       SystemProgram.transfer({ fromPubkey: owner, toPubkey: wsolAta, lamports: solIn }),
       createSyncNativeInstruction(wsolAta),
       // Bot BUY = IDL buy
-      // Token-2022 with transfer fee: base_amount_out = 1n to avoid Overflow (6023)
-      buildBuyInstruction(accs, isToken2022 ? 1n : minTokensOut, maxSolIn, owner),
+      // base_amount_out = 1n to avoid Overflow (6023) at buy.rs:414
+      // The program uses base_amount_out as MINIMUM (not exact), so 1n accepts any output.
+      // Slippage protection comes from maxSolIn (max_quote_amount_in).
+      buildBuyInstruction(accs, 1n, maxSolIn, owner),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,

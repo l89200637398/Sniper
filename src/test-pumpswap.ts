@@ -167,26 +167,24 @@ async function main() {
   const maxSol = (solIn*10300n)/10000n;
 
   // For IDL buy: base_amount_out = token amount, max_quote_amount_in = wSOL
-  // Token-2022 with transfer fee: base_amount_out = 1n to avoid Overflow (6023)
-  // If token is base: buy(tokenOut, maxSolIn) — standard
-  // If token is quote: sell(solIn, minTokenOut) — inverted
+  // base_amount_out = 1n to avoid Overflow (6023) at buy.rs:414
+  // IDL confirms base_amount_out is MINIMUM (error 6040: "slippage - would buy less than min_base_amount_out")
+  // Overflow caused by: base_amount_out * quote_reserve > u64_max in program math
+  // Using 1n: 1 * 18B = 18B → fits u64. Slippage protection via max_quote_amount_in.
   const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
-  // Token-2022 with transfer fee: use 1n as min to avoid Overflow in fee math
-  const buyTokenAmount = isToken2022 ? 1n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
-    buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner);
-    console.log(`   IDL: buy(base_amount_out=${buyTokenAmount}${isToken2022 ? ' [Token-2022 workaround]' : ''}, max_quote_amount_in=${maxSol})`);
+    buyIx = buildBuyInstruction(accs, 1n, maxSol, owner);
+    console.log(`   IDL: buy(base_amount_out=1 [overflow fix], max_quote_amount_in=${maxSol})`);
+    console.log(`   Expected tokens: ~${expTok} (calculated, not enforced by program)`);
   } else {
-    // token is quote → we "sell" base(wSOL) to get quote(token) → IDL sell
     buyIx = buildSellInstruction(accs, solIn, minTok);
     console.log(`   IDL: sell(base_amount_in=${solIn}, min_quote_amount_out=${minTok})`);
   }
   console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
-  console.log(`   Data size: ${buyIx.data.length} bytes (should be 25)`);
+  console.log(`   Data size: ${buyIx.data.length} bytes (should be 24)`);
   console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
-  console.log(`   trackVolume byte[24]: ${buyIx.data.length > 24 ? buyIx.data[24] : 'MISSING!'}`);
   console.log(`\n   Account keys:`);
   buyIx.keys.forEach((k, i) => console.log(`     [${i.toString().padStart(2)}] ${k.pubkey.toBase58().substring(0,20)}... ${k.isSigner ? 'S' : '-'}${k.isWritable ? 'W' : '-'}`));
 
