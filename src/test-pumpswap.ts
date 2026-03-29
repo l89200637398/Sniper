@@ -85,7 +85,7 @@ async function main() {
     console.log(`\n   Pool data after coinCreator (offset 243, ${remaining.length} bytes):`);
     console.log(`   Hex: ${remaining.toString('hex')}`);
     console.log(`   [243] is_mayhem_mode: ${remaining[0]}`);
-    if (remaining.length > 1) console.log(`   [244] unknown_1: ${remaining[1]}`);
+    if (remaining.length > 1) console.log(`   [244] is_cashback_coin (OptionBool): ${remaining[1]} ${remaining[1] === 1 ? '← CASHBACK ENABLED' : ''}`);
     if (remaining.length > 2) console.log(`   [245] unknown_2: ${remaining[2]}`);
     if (remaining.length > 8) console.log(`   [244-251] as u64: ${remaining.readBigUInt64LE(1)}`);
     if (remaining.length > 16) console.log(`   [252-259] as u64: ${remaining.readBigUInt64LE(9)}`);
@@ -170,17 +170,19 @@ async function main() {
   // If token is base: buy(tokenOut, maxSolIn) — standard
   // If token is quote: sell(solIn, minTokenOut) — inverted
   const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
+  const isCashback = poolState.isCashbackCoin;
   // Token-2022 with transfer fee: use 1n as min to avoid Overflow in fee math
   const buyTokenAmount = isToken2022 ? 1n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
-    buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner);
+    buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner, isCashback);
     console.log(`   IDL: buy(base_amount_out=${buyTokenAmount}${isToken2022 ? ' [Token-2022 workaround]' : ''}, max_quote_amount_in=${maxSol})`);
   } else {
     // token is quote → we "sell" base(wSOL) to get quote(token) → IDL sell
-    buyIx = buildSellInstruction(accs, solIn, minTok);
+    buyIx = buildSellInstruction(accs, solIn, minTok, owner, isCashback);
     console.log(`   IDL: sell(base_amount_in=${solIn}, min_quote_amount_out=${minTok})`);
   }
+  console.log(`   isCashbackCoin: ${isCashback}`);
   console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
   console.log(`   Data size: ${buyIx.data.length} bytes (should be 25 with track_volume)`);
