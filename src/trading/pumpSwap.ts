@@ -248,10 +248,12 @@ export function buildBuyInstruction(
   maxSolIn:          bigint,   // макс wSOL к трате (с учётом слиппажа)
   user:              PublicKey,
 ): TransactionInstruction {
+  const trackVolume = Buffer.alloc(1, 0); // 0 = don't track volume (avoids u64 overflow in volume math)
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_BUY,   // 66063d12 = global:buy = BOT BUY MEME
     encodeU64(tokenAmountOut),      // base_amount_out
     encodeU64(maxSolIn),            // max_quote_amount_in
+    trackVolume,                    // byte 24: track_volume flag (added late 2025)
   ]);
 
   const userVolumeAcc = getUserVolumeAccumulatorPDA(user);
@@ -297,10 +299,12 @@ export function buildSellInstruction(
   tokenAmountIn:    bigint,   // мем токены к трате
   minSolOut:        bigint,   // мин wSOL к получению
 ): TransactionInstruction {
+  const trackVolume = Buffer.alloc(1, 0); // 0 = don't track volume (avoids u64 overflow)
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_SELL,  // 33e685a4 = global:sell = BOT SELL MEME
     encodeU64(tokenAmountIn),       // base_amount_in
     encodeU64(minSolOut),           // min_quote_amount_out
+    trackVolume,                    // byte 24: track_volume flag
   ]);
 
   const keys = [

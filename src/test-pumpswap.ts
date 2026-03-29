@@ -184,7 +184,9 @@ async function main() {
   }
   console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
+  console.log(`   Data size: ${buyIx.data.length} bytes (should be 25)`);
   console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
+  console.log(`   trackVolume byte[24]: ${buyIx.data.length > 24 ? buyIx.data[24] : 'MISSING!'}`);
   console.log(`\n   Account keys:`);
   buyIx.keys.forEach((k, i) => console.log(`     [${i.toString().padStart(2)}] ${k.pubkey.toBase58().substring(0,20)}... ${k.isSigner ? 'S' : '-'}${k.isWritable ? 'W' : '-'}`));
 
