@@ -85,7 +85,7 @@ async function main() {
     console.log(`\n   Pool data after coinCreator (offset 243, ${remaining.length} bytes):`);
     console.log(`   Hex: ${remaining.toString('hex')}`);
     console.log(`   [243] is_mayhem_mode: ${remaining[0]}`);
-    if (remaining.length > 1) console.log(`   [244] unknown_1: ${remaining[1]}`);
+    if (remaining.length > 1) console.log(`   [244] is_cashback_coin (OptionBool): ${remaining[1]} ${remaining[1] === 1 ? '← CASHBACK ENABLED' : ''}`);
     if (remaining.length > 2) console.log(`   [245] unknown_2: ${remaining[2]}`);
     if (remaining.length > 8) console.log(`   [244-251] as u64: ${remaining.readBigUInt64LE(1)}`);
     if (remaining.length > 16) console.log(`   [252-259] as u64: ${remaining.readBigUInt64LE(9)}`);
@@ -145,7 +145,7 @@ async function main() {
   console.log(`   creatorVaultAta: ${vaultAta.toBase58()}`);
 
   // 6. Build BOT BUY instruction
-  sep('6. BOT BUY (IDL buy, disc 66063d12, 23 accounts)');
+  sep('6. BOT BUY (IDL buy, disc 66063d12, 24 accounts + poolV2 PDA)');
   const accs = {
     pool, user: owner,
     baseMint: poolState.baseMint, quoteMint: poolState.quoteMint,
@@ -172,18 +172,22 @@ async function main() {
   // Overflow caused by: base_amount_out * quote_reserve > u64_max in program math
   // Using 1n: 1 * 18B = 18B → fits u64. Slippage protection via max_quote_amount_in.
   const isToken2022 = baseTokenProg.equals(new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb'));
+  const isCashback = poolState.isCashbackCoin;
+  // Token-2022 with transfer fee: use 1n as min to avoid Overflow in fee math
+  const buyTokenAmount = isToken2022 ? 1n : minTok;
   let buyIx: import('@solana/web3.js').TransactionInstruction;
   if (tokenIsBase) {
-    buyIx = buildBuyInstruction(accs, 1n, maxSol, owner);
-    console.log(`   IDL: buy(base_amount_out=1 [overflow fix], max_quote_amount_in=${maxSol})`);
-    console.log(`   Expected tokens: ~${expTok} (calculated, not enforced by program)`);
+    buyIx = buildBuyInstruction(accs, buyTokenAmount, maxSol, owner, isCashback);
+    console.log(`   IDL: buy(base_amount_out=${buyTokenAmount}${isToken2022 ? ' [Token-2022 workaround]' : ''}, max_quote_amount_in=${maxSol})`);
   } else {
-    buyIx = buildSellInstruction(accs, solIn, minTok);
+    // token is quote → we "sell" base(wSOL) to get quote(token) → IDL sell
+    buyIx = buildSellInstruction(accs, solIn, minTok, owner, isCashback);
     console.log(`   IDL: sell(base_amount_in=${solIn}, min_quote_amount_out=${minTok})`);
   }
+  console.log(`   isCashbackCoin: ${isCashback}`);
   console.log(`   isToken2022: ${isToken2022}`);
   console.log(`   Account count: ${buyIx.keys.length}`);
-  console.log(`   Data size: ${buyIx.data.length} bytes (should be 24)`);
+  console.log(`   Data size: ${buyIx.data.length} bytes (should be 25 with track_volume)`);
   console.log(`   disc: ${buyIx.data.subarray(0,8).toString('hex')}`);
   console.log(`\n   Account keys:`);
   buyIx.keys.forEach((k, i) => console.log(`     [${i.toString().padStart(2)}] ${k.pubkey.toBase58().substring(0,20)}... ${k.isSigner ? 'S' : '-'}${k.isWritable ? 'W' : '-'}`));

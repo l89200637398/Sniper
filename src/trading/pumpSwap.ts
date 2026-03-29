@@ -25,9 +25,10 @@
 //   protocolFeeRecipientTokenAccount = ATA(feeRecipient, wSOL)
 //   coinCreatorVaultAta              = ATA(vaultAuthority, wSOL)
 //
-// Аккаунтов: 19 для BOT BUY (IDL buy), 21 для BOT SELL (IDL sell)
+// Аккаунтов: 24 для BOT BUY (IDL buy), 22 для BOT SELL (IDL sell)
 //   Sep 2025: +2 fee_config/fee_program для обоих
 //   Aug 2025: vol.accumulators только в IDL buy (= BOT BUY)
+//   2026: +1 poolV2 PDA (remaining account, required since SDK v1.14+)
 //
 // Источники:
 //   - pump-fun/pump-public-docs (официальная документация)
@@ -140,6 +141,17 @@ function getFeeConfigPDA(): PublicKey {
   )[0];
 }
 
+/**
+ * Pool V2 PDA — required as remaining account for buy/sell instructions.
+ * Seeds: ['pool-v2', baseMint.toBuffer()] under PUMP_SWAP_PROGRAM.
+ * Source: official @pump-fun/pump-swap-sdk v1.14.1
+ */
+function getPoolV2PDA(baseMint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from('pool-v2'), baseMint.toBuffer()], PUMP_SWAP_PROGRAM,
+  )[0];
+}
+
 const CACHED_GLOBAL_CONFIG     = getGlobalConfigPDA();
 const CACHED_EVENT_AUTHORITY   = getEventAuthorityPDA();
 const CACHED_GLOBAL_VOLUME_ACC = getGlobalVolumeAccumulatorPDA();
@@ -170,6 +182,7 @@ export interface PoolState {
   poolBaseTokenAccount:  PublicKey;   // pool meme token vault
   poolQuoteTokenAccount: PublicKey;   // pool wSOL vault
   coinCreator:           PublicKey | null;
+  isCashbackCoin:        boolean;    // byte[244]: OptionBool — cashback upgrade (аналог pump.fun cashback)
 }
 
 export function parsePoolAccount(data: Buffer): PoolState {
@@ -189,7 +202,12 @@ export function parsePoolAccount(data: Buffer): PoolState {
     const bytes = data.subarray(211, 243);
     if (!bytes.every(b => b === 0)) coinCreator = new PublicKey(bytes);
   }
-  return { baseMint, quoteMint, poolBaseTokenAccount, poolQuoteTokenAccount, coinCreator };
+
+  // byte[243] = is_mayhem_mode (bool)
+  // byte[244] = is_cashback_coin (OptionBool = struct{bool}, 1 byte)
+  const isCashbackCoin = data.length > 244 ? data[244] === 1 : false;
+
+  return { baseMint, quoteMint, poolBaseTokenAccount, poolQuoteTokenAccount, coinCreator, isCashbackCoin };
 }
 
 // ─── AMM math ─────────────────────────────────────────────────────────────────
@@ -240,21 +258,26 @@ interface SwapAccounts {
  * User платит wSOL (quote), получает meme token (base).
  * disc: 66063d12 (PUMP_SWAP_BUY = global:buy)
  * args: base_amount_out (мем токены к получению), max_quote_amount_in (макс wSOL к трате)
- * 21 аккаунт (Aug 2025: +vol.acc, Sep 2025: +fee_config/fee_program)
+ * 24 аккаунта (Aug 2025: +vol.acc, Sep 2025: +fee_config/fee_program, 2026: +poolV2 PDA)
  */
 export function buildBuyInstruction(
   accs:              SwapAccounts,
   tokenAmountOut:    bigint,   // мем токены к получению
   maxSolIn:          bigint,   // макс wSOL к трате (с учётом слиппажа)
   user:              PublicKey,
+  isCashbackCoin:    boolean = false,
 ): TransactionInstruction {
+  // OptionBool track_volume = { 0: true } = 1 byte (Borsh: 0x01)
+  // Source: official SDK always passes { 0: true }
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_BUY,   // 66063d12 = global:buy = BOT BUY MEME
     encodeU64(tokenAmountOut),      // base_amount_out (minimum tokens, use 1n to avoid overflow)
     encodeU64(maxSolIn),            // max_quote_amount_in
+    Buffer.from([1]),               // track_volume: OptionBool = true
   ]);
 
   const userVolumeAcc = getUserVolumeAccumulatorPDA(user);
+  const poolV2Pda     = getPoolV2PDA(accs.baseMint);
 
   const keys = [
     { pubkey: accs.pool,                             isSigner: false, isWritable: true  }, //  0 pool (writable Nov 2025)
@@ -267,20 +290,31 @@ export function buildBuyInstruction(
     { pubkey: accs.poolBaseTokenAccount,             isSigner: false, isWritable: true  }, //  7 pool_base = pool meme vault
     { pubkey: accs.poolQuoteTokenAccount,            isSigner: false, isWritable: true  }, //  8 pool_quote = pool wSOL vault
     { pubkey: accs.protocolFeeRecipient,             isSigner: false, isWritable: false }, //  9
-    { pubkey: accs.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true  }, // 10 ATA for wSOL (fee in wSOL)
+    { pubkey: accs.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true  }, // 10 ATA for quoteMint (fee)
     { pubkey: accs.baseTokenProgram,                 isSigner: false, isWritable: false }, // 11 base_token_program (meme)
     { pubkey: accs.quoteTokenProgram,                isSigner: false, isWritable: false }, // 12 quote_token_program (wSOL)
     { pubkey: SystemProgram.programId,               isSigner: false, isWritable: false }, // 13
     { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,           isSigner: false, isWritable: false }, // 14
     { pubkey: CACHED_EVENT_AUTHORITY,                isSigner: false, isWritable: false }, // 15
     { pubkey: PUMP_SWAP_PROGRAM,                     isSigner: false, isWritable: false }, // 16 self
-    { pubkey: accs.coinCreatorVaultAta,              isSigner: false, isWritable: true  }, // 17 creator vault (wSOL)
+    { pubkey: accs.coinCreatorVaultAta,              isSigner: false, isWritable: true  }, // 17 creator vault (quoteMint)
     { pubkey: accs.coinCreatorVaultAuthority,        isSigner: false, isWritable: false }, // 18
     { pubkey: CACHED_GLOBAL_VOLUME_ACC,              isSigner: false, isWritable: false }, // 19 (read-only per IDL)
     { pubkey: userVolumeAcc,                         isSigner: false, isWritable: true  }, // 20 Aug 2025
     { pubkey: CACHED_FEE_CONFIG,                     isSigner: false, isWritable: false }, // 21 Sep 2025
     { pubkey: FEE_PROGRAM,                           isSigner: false, isWritable: false }, // 22 Sep 2025
   ];
+
+  // remainingAccounts — cashback upgrade (аналог pump.fun bonding-curve-v2)
+  // Cashback: [userVolumeAccWsolAta (writable), poolV2 (read-only)]
+  // Non-cashback: [poolV2 (read-only)]
+  if (isCashbackCoin) {
+    const userVolAccWsolAta = getAssociatedTokenAddressSync(
+      WSOL_MINT, userVolumeAcc, true, TOKEN_PROGRAM_ID,
+    );
+    keys.push({ pubkey: userVolAccWsolAta, isSigner: false, isWritable: true  });
+  }
+  keys.push({ pubkey: poolV2Pda, isSigner: false, isWritable: false });
 
   return new TransactionInstruction({ programId: PUMP_SWAP_PROGRAM, keys, data });
 }
@@ -290,18 +324,22 @@ export function buildBuyInstruction(
  * User платит meme token (base), получает wSOL (quote).
  * disc: 33e685a4 (PUMP_SWAP_SELL = global:sell)
  * args: base_amount_in (мем токены к трате), min_quote_amount_out (мин wSOL к получению)
- * 21 аккаунт (Sep 2025: +fee_config/fee_program; vol.acc НЕ нужны для sell)
+ * 22 аккаунта (Sep 2025: +fee_config/fee_program, 2026: +poolV2 PDA; vol.acc НЕ нужны для sell)
  */
 export function buildSellInstruction(
   accs:             SwapAccounts,
   tokenAmountIn:    bigint,   // мем токены к трате
   minSolOut:        bigint,   // мин wSOL к получению
+  user?:            PublicKey, // нужен для cashback (volume accumulator)
+  isCashbackCoin:   boolean = false,
 ): TransactionInstruction {
   const data = Buffer.concat([
     DISCRIMINATOR.PUMP_SWAP_SELL,  // 33e685a4 = global:sell = BOT SELL MEME
     encodeU64(tokenAmountIn),       // base_amount_in
     encodeU64(minSolOut),           // min_quote_amount_out
   ]);
+
+  const poolV2Pda = getPoolV2PDA(accs.baseMint);
 
   const keys = [
     { pubkey: accs.pool,                             isSigner: false, isWritable: true  }, //  0
@@ -314,18 +352,31 @@ export function buildSellInstruction(
     { pubkey: accs.poolBaseTokenAccount,             isSigner: false, isWritable: true  }, //  7 pool meme vault
     { pubkey: accs.poolQuoteTokenAccount,            isSigner: false, isWritable: true  }, //  8 pool wSOL vault
     { pubkey: accs.protocolFeeRecipient,             isSigner: false, isWritable: false }, //  9
-    { pubkey: accs.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true  }, // 10 ATA for wSOL
+    { pubkey: accs.protocolFeeRecipientTokenAccount, isSigner: false, isWritable: true  }, // 10 ATA for quoteMint
     { pubkey: accs.baseTokenProgram,                 isSigner: false, isWritable: false }, // 11
     { pubkey: accs.quoteTokenProgram,                isSigner: false, isWritable: false }, // 12
     { pubkey: SystemProgram.programId,               isSigner: false, isWritable: false }, // 13
     { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID,           isSigner: false, isWritable: false }, // 14
     { pubkey: CACHED_EVENT_AUTHORITY,                isSigner: false, isWritable: false }, // 15
     { pubkey: PUMP_SWAP_PROGRAM,                     isSigner: false, isWritable: false }, // 16 self
-    { pubkey: accs.coinCreatorVaultAta,              isSigner: false, isWritable: true  }, // 17 creator vault (wSOL)
+    { pubkey: accs.coinCreatorVaultAta,              isSigner: false, isWritable: true  }, // 17 creator vault (quoteMint)
     { pubkey: accs.coinCreatorVaultAuthority,        isSigner: false, isWritable: false }, // 18
     { pubkey: CACHED_FEE_CONFIG,                     isSigner: false, isWritable: false }, // 19 Sep 2025
     { pubkey: FEE_PROGRAM,                           isSigner: false, isWritable: false }, // 20 Sep 2025
   ];
+
+  // remainingAccounts — cashback upgrade
+  // Cashback sell: [userVolAccQuoteAta (writable), userVolAcc (writable), poolV2]
+  // Non-cashback sell: [poolV2]
+  if (isCashbackCoin && user) {
+    const userVolumeAcc = getUserVolumeAccumulatorPDA(user);
+    const userVolAccQuoteAta = getAssociatedTokenAddressSync(
+      accs.quoteMint, userVolumeAcc, true, accs.quoteTokenProgram,
+    );
+    keys.push({ pubkey: userVolAccQuoteAta, isSigner: false, isWritable: true  });
+    keys.push({ pubkey: userVolumeAcc,      isSigner: false, isWritable: true  });
+  }
+  keys.push({ pubkey: poolV2Pda, isSigner: false, isWritable: false });
 
   return new TransactionInstruction({ programId: PUMP_SWAP_PROGRAM, keys, data });
 }
@@ -483,7 +534,7 @@ export async function buyTokenPumpSwap(
 
   await ensureSufficientBalance(connection, owner, solAmount + maxTip + estFee / 1e9 + 0.003);
 
-  const { accs, tokenReserve, solReserve } = await resolveSwapAccounts(connection, mint, owner, getMintState(mint).pool);
+  const { accs, poolState, tokenReserve, solReserve } = await resolveSwapAccounts(connection, mint, owner, getMintState(mint).pool);
 
   const solIn           = BigInt(Math.floor(solAmount * 1e9));
   // Bot BUY = IDL buy: платим wSOL (quote), получаем meme token (base)
@@ -495,6 +546,10 @@ export async function buyTokenPumpSwap(
   const isToken2022 = !accs.baseTokenProgram.equals(TOKEN_PROGRAM_ID);
   const wsolAta = accs.userQuoteTokenAccount;
   const memeAta = accs.userBaseTokenAccount;
+
+  if (poolState.isCashbackCoin) {
+    logger.info(`PumpSwap cashback coin detected for ${mint.toBase58()}`);
+  }
 
   const buildTx = async (): Promise<VersionedTransaction> => {
     const { blockhash } = await getCachedBlockhashWithHeight();
@@ -512,10 +567,7 @@ export async function buyTokenPumpSwap(
       SystemProgram.transfer({ fromPubkey: owner, toPubkey: wsolAta, lamports: solIn }),
       createSyncNativeInstruction(wsolAta),
       // Bot BUY = IDL buy
-      // base_amount_out = 1n to avoid Overflow (6023) at buy.rs:414
-      // The program uses base_amount_out as MINIMUM (not exact), so 1n accepts any output.
-      // Slippage protection comes from maxSolIn (max_quote_amount_in).
-      buildBuyInstruction(accs, 1n, maxSolIn, owner),
+      buildBuyInstruction(accs, minTokensOut, maxSolIn, owner, poolState.isCashbackCoin),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
@@ -554,7 +606,7 @@ export async function sellTokenPumpSwap(
 
   await ensureSufficientBalance(connection, owner, maxTip + estFee / 1e9 + 0.001);
 
-  const { accs, tokenReserve, solReserve } = await resolveSwapAccounts(connection, mint, owner, getMintState(mint).pool);
+  const { accs, poolState, tokenReserve, solReserve } = await resolveSwapAccounts(connection, mint, owner, getMintState(mint).pool);
 
   // Bot SELL = IDL sell: платим meme token (base), получаем wSOL (quote)
   // computeAmountOut(tokenIn, poolTokenReserve, poolWsolReserve)
@@ -573,7 +625,7 @@ export async function sellTokenPumpSwap(
         owner, wsolAta, owner, WSOL_MINT, TOKEN_PROGRAM_ID,
       ),
       // Bot SELL = IDL sell
-      buildSellInstruction(accs, tokenAmountRaw, minSolOut),
+      buildSellInstruction(accs, tokenAmountRaw, minSolOut, owner, poolState.isCashbackCoin),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
