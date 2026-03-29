@@ -410,20 +410,22 @@ async function resolveSwapAccounts(
 
   // tokenProgram для SOL-стороны всегда SPL (wSOL)
   const solTokenProgram = TOKEN_PROGRAM_ID;
+  // tokenProgram для quote-стороны пула (может быть не wSOL)
+  const quoteTokenProgram = isBaseToken ? solTokenProgram : baseTokenProgram;
 
   // ATA пользователя для meme токена и wSOL
   const userMemeAta = getAssociatedTokenAddressSync(mint, user, false, baseTokenProgram);
   const userWsolAta = getAssociatedTokenAddressSync(WSOL_MINT, user, false, TOKEN_PROGRAM_ID);
 
-  // Protocol fee recipient — ATA для wSOL (fee всегда в SOL/wSOL)
+  // Protocol fee recipient — ATA для quoteMint пула (не всегда wSOL!)
   const recipients          = await getProtocolFeeRecipients(connection);
   const feeRecipient        = recipients[Math.floor(Math.random() * recipients.length)];
-  const feeRecipientWsolAta = getAssociatedTokenAddressSync(WSOL_MINT, feeRecipient, true, TOKEN_PROGRAM_ID);
+  const feeRecipientAta     = getAssociatedTokenAddressSync(poolState.quoteMint, feeRecipient, true, quoteTokenProgram);
 
-  // Creator vault ATA для wSOL
+  // Creator vault ATA для quoteMint пула
   const coinCreator        = poolState.coinCreator ?? PublicKey.default;
   const vaultAuthority     = getCoinCreatorVaultAuthorityPDA(coinCreator);
-  const coinCreatorVaultAta = getAssociatedTokenAddressSync(WSOL_MINT, vaultAuthority, true, TOKEN_PROGRAM_ID);
+  const coinCreatorVaultAta = getAssociatedTokenAddressSync(poolState.quoteMint, vaultAuthority, true, quoteTokenProgram);
 
   // Reserves
   const [memeBalanceAcc, solBalanceAcc] = isBaseToken
@@ -453,7 +455,7 @@ async function resolveSwapAccounts(
       poolBaseTokenAccount:             poolState.poolBaseTokenAccount,
       poolQuoteTokenAccount:            poolState.poolQuoteTokenAccount,
       protocolFeeRecipient:             feeRecipient,
-      protocolFeeRecipientTokenAccount: feeRecipientWsolAta,
+      protocolFeeRecipientTokenAccount: feeRecipientAta,
       baseTokenProgram:                 isBaseToken ? baseTokenProgram : solTokenProgram,
       quoteTokenProgram:                isBaseToken ? solTokenProgram : baseTokenProgram,
       coinCreatorVaultAta,
