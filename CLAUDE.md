@@ -1,8 +1,8 @@
-# CLAUDE.md — Solana Sniper Bot v2
+# CLAUDE.md — Solana Sniper Bot v3
 
 ## What This Is
 
-A Solana MEV sniper bot targeting Pump.fun and PumpSwap token launches. It streams real-time events via Yellowstone Geyser gRPC, executes buys through Jito MEV-Share bundles, manages positions with rule-based exits, and provides a Telegram control interface.
+A Solana MEV sniper bot targeting Pump.fun, PumpSwap, and (planned) Raydium token launches. It streams real-time events via Yellowstone Geyser gRPC, executes buys through Jito MEV-Share bundles, manages positions with rule-based exits, and provides a Telegram control interface.
 
 ## Tech Stack
 
@@ -58,13 +58,14 @@ src/
 │   ├── retry.ts             # Retry with exponential backoff
 │   ├── rpc-limiter.ts       # RPC rate limiting decorator
 │   └── sha.ts               # SHA256 utility
+├── test-pumpswap.ts         # PumpSwap simulation test script
 └── autogen/
     └── runtime-layout.json  # Auto-generated on-chain layout snapshot
 
 proto/                        # gRPC protocol buffer definitions
 scripts/
 ├── analyze-trades.ts        # Post-trade analysis from JSONL logs
-├── test-trade.ts            # Manual trade execution testing
+├── test-trade.ts            # Manual trade execution testing (auto-detects protocol)
 └── verify.ts                # On-chain layout verification (runs as prestart)
 data/
 ├── positions.json           # Persisted active positions
@@ -81,7 +82,8 @@ npm start         # Run verify.ts prestart hook, then dist/index.js
 
 There is no test runner (Jest/Vitest). Testing is done via:
 - `scripts/verify.ts` — validates on-chain account layouts before startup
-- `scripts/test-trade.ts` — manual trade execution
+- `scripts/test-trade.ts` — manual trade execution (auto-detects pump.fun vs PumpSwap)
+- `src/test-pumpswap.ts` — PumpSwap-specific simulation test
 - `scripts/analyze-trades.ts` — post-trade log analysis
 
 ## Architecture
@@ -99,9 +101,70 @@ Geyser gRPC stream → EventEmitter events
 
 ### Protocols Supported
 
-- **Pump.fun**: Bonding curve buys with cashback upgrade support
-- **PumpSwap**: AMM pool buys/sells with slippage handling
+- **Pump.fun**: Bonding curve buys with cashback upgrade support (Feb 2026)
+- **PumpSwap**: AMM pool buys/sells with poolV2 PDA + cashback support
 - **Mayhem Mode**: Alternative protocol with special fee recipients
+
+### Protocol Details
+
+#### Pump.fun (Bonding Curve)
+
+- **Program**: `6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P`
+- **Instruction**: `buy_exact_sol_in` (disc: `38fc74089edfcd5f`)
+  - Old `buy` (exact-out) is deprecated → error 6024
+  - Args: `sol_amount` (u64), `min_tokens_out` (u64)
+- **Account layout**: 17 accounts (indices 0–16)
+  - [9] `creatorVault` — PDA: `['creator-vault', creator]`
+  - [12] `globalVolumeAccumulator` (read-only)
+  - [13] `userVolumeAccumulator` (writable)
+  - [14] `feeConfig` — PDA under fee program
+  - [15] `feeProgram`: `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ`
+  - [16] `bondingCurveV2` — PDA: `['bonding-curve-v2', mint]` (added Feb 2026)
+- **Cashback**: byte[82] of bonding curve = `cashback_enabled`
+- **BondingCurve layout**: 151 bytes after cashback upgrade
+  - virtual_token_reserves: u64 @ 8
+  - virtual_sol_reserves: u64 @ 16
+  - real_token_reserves: u64 @ 24
+  - real_sol_reserves: u64 @ 32
+  - complete: bool @ 48
+  - creator: Pubkey @ 49
+  - is_mayhem_mode: bool @ 81
+  - cashback_enabled: bool @ 82
+
+#### PumpSwap (AMM)
+
+- **Program**: `pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA`
+- **Fee Program**: `pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ`
+- **Buy instruction**: disc `66063d1201daebea`
+  - Args: `base_amount_out` (u64), `max_quote_amount_in` (u64), `track_volume` (OptionBool)
+  - Data: 25 bytes (8 disc + 8 + 8 + 1 track_volume)
+  - 23 fixed accounts + remainingAccounts
+- **Sell instruction**: disc `33e685a4...`
+  - Args: `base_amount_in` (u64), `min_quote_amount_out` (u64)
+  - Data: 24 bytes
+  - 21 fixed accounts + remainingAccounts
+- **Pool PDA**: seeds `['pool', u16_le(0), pumpAuthority, baseMint, wSOL]`
+  - pumpAuthority = PDA `['pool-authority', baseMint]` under pump.fun program
+- **poolV2 PDA**: seeds `['pool-v2', baseMint]` — REQUIRED as remaining account
+- **Pool account layout**: 301 bytes
+  - baseMint: Pubkey @ 43 (meme token)
+  - quoteMint: Pubkey @ 75 (wSOL)
+  - poolBaseTokenAccount: Pubkey @ 139
+  - poolQuoteTokenAccount: Pubkey @ 171
+  - coinCreator: Pubkey @ 211
+  - is_mayhem_mode: bool @ 243
+  - is_cashback_coin: OptionBool @ 244
+- **Remaining accounts by cashback status**:
+  - Non-cashback buy: `[poolV2]`
+  - Cashback buy: `[userVolumeAccWsolAta (writable), poolV2]`
+  - Non-cashback sell: `[poolV2]`
+  - Cashback sell: `[userVolAccQuoteAta (writable), userVolAcc (writable), poolV2]`
+- **Fee ATAs**: MUST use `poolState.quoteMint` (not hardcoded wSOL) for:
+  - `protocolFeeRecipientTokenAccount` = ATA(feeRecipient, quoteMint)
+  - `coinCreatorVaultAta` = ATA(vaultAuthority, quoteMint)
+- **OptionBool**: Borsh struct with single bool field = 1 byte (0=false, 1=true)
+- **Fees**: Dynamic from feeConfig (not hardcoded). Actual ~125 bps for most pools.
+- **Alternative instruction**: `buy_exact_quote_in` (disc `c62e1552b4d9e870`) — specifies SOL input instead of token output
 
 ### Position Lifecycle
 
@@ -119,6 +182,7 @@ Geyser gRPC stream → EventEmitter events
 - **WalletTracker** (`core/wallet-tracker.ts`): Copy-trading system (tracks wallets with >65% win rate, min 20 trades)
 - **TokenScorer** (`utils/token-scorer.ts`): 0–100 point scoring for token entry decisions
 - **SellEngine** (`core/sell-engine.ts`): Unified sell across pump.fun/pumpswap/mayhem with retry logic
+- **Detector** (`core/detector.ts`): On-chain protocol detection (pump.fun bonding curve vs PumpSwap AMM)
 
 ## Configuration
 
@@ -141,6 +205,22 @@ Environment variables via `.env` (dotenv).
 - **Concurrency**: Use `p-limit` for bounded parallel operations (e.g., Jito queue at 20)
 - **Graceful shutdown**: SIGINT/SIGTERM handlers close all positions with 30s timeout
 
+## Known Issues & Fixes (March 2026)
+
+### PumpSwap Overflow 6023 — FIXED
+- **Root cause**: Missing `poolV2` PDA as remaining account in buy/sell instructions
+- **Fix**: Added `getPoolV2PDA(baseMint)` with seeds `['pool-v2', baseMint]`, included as remaining account
+- **Also**: Added `track_volume: OptionBool = true` (byte 0x01) to buy instruction data
+
+### PumpSwap ConstraintTokenMint 2014 — FIXED
+- **Root cause**: Fee and creator vault ATAs were using hardcoded wSOL instead of pool's `quoteMint`
+- **Fix**: Use `poolState.quoteMint` for both `protocolFeeRecipientTokenAccount` and `coinCreatorVaultAta`
+
+### PumpSwap Cashback Support — ADDED
+- Analogous to pump.fun's Feb 2026 cashback upgrade
+- Pool byte[244] = `is_cashback_coin` (OptionBool)
+- For cashback coins, additional remaining accounts needed before poolV2
+
 ## Important Notes
 
 - The `scripts/verify.ts` prestart hook must pass before production startup — it validates on-chain account layouts match expectations
@@ -148,3 +228,4 @@ Environment variables via `.env` (dotenv).
 - Jito tip amounts are critical for execution speed — too low = missed trades, too high = wasted SOL
 - The copy-trading system (`copyTrade.enabled`) is currently disabled in config
 - Documentation exists in DOCX format (English + Russian) in the repo root
+- Official PumpSwap SDK reference: `@pump-fun/pump-swap-sdk` v1.14.1 (npm)
