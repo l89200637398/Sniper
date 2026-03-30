@@ -176,6 +176,98 @@ export const config = {
     },
     pumpSwapMaxReserveFraction: 0.2,
 
+    // ── Raydium LaunchLab (bonding curve) ─────────────────────────────────
+    maxRaydiumLaunchPositions: 1,
+    raydiumLaunch: {
+      entryAmountSol:    0.05,
+      minEntryAmountSol: 0.005,
+      minLiquiditySol:   0.04,
+      slippageBps:       2500,
+      exit: {
+        entryStopLossPercent:          25,
+        velocityDropPercent:           15,
+        velocityWindowMs:              500,
+        trailingActivationPercent:     25,
+        trailingDrawdownPercent:       12,
+        slowDrawdownPercent:           30,
+        slowDrawdownMinDurationMs:     800,
+        hardStopPercent:               40,
+        stagnationWindowMs:        60_000,
+        stagnationMinMove:             0.08,
+        timeStopAfterMs:           90_000,
+        timeStopMinPnl:               -0.05,
+        breakEvenAfterTrailingPercent: -1.5,
+        takeProfit: [
+          { levelPercent:   8, portion: 0.20 },
+          { levelPercent:  20, portion: 0.10 },
+          { levelPercent:  50, portion: 0.40 },
+          { levelPercent: 150, portion: 0.30 },
+        ],
+      },
+    },
+
+    // ── Raydium CPMM (AMM) ───────────────────────────────────────────────
+    maxRaydiumCpmmPositions: 1,
+    raydiumCpmm: {
+      entryAmountSol:        0.05,
+      minEntryAmountSol:     0.005,
+      minLiquiditySol:       1,
+      slippageBps:           1800,
+      maxReserveFraction:    0.15,
+      exit: {
+        entryStopLossPercent:          20,
+        trailingActivationPercent:     35,
+        trailingDrawdownPercent:       18,
+        slowDrawdownPercent:           38,
+        slowDrawdownMinDurationMs:     1200,
+        velocityDropPercent:           16,
+        velocityWindowMs:              600,
+        hardStopPercent:               48,
+        stagnationWindowMs:        240_000,
+        stagnationMinMove:             0.07,
+        timeStopAfterMs:           420_000,
+        timeStopMinPnl:               -0.08,
+        breakEvenAfterTrailingPercent: -1.5,
+        takeProfit: [
+          { levelPercent:   50, portion: 0.25 },
+          { levelPercent:  200, portion: 0.25 },
+          { levelPercent:  600, portion: 0.25 },
+          { levelPercent: 1500, portion: 0.25 },
+        ],
+      },
+    },
+
+    // ── Raydium AMM v4 (legacy) ──────────────────────────────────────────
+    maxRaydiumAmmV4Positions: 1,
+    raydiumAmmV4: {
+      entryAmountSol:        0.05,
+      minEntryAmountSol:     0.005,
+      minLiquiditySol:       1,
+      slippageBps:           1800,
+      maxReserveFraction:    0.15,
+      exit: {
+        entryStopLossPercent:          20,
+        trailingActivationPercent:     35,
+        trailingDrawdownPercent:       18,
+        slowDrawdownPercent:           38,
+        slowDrawdownMinDurationMs:     1200,
+        velocityDropPercent:           16,
+        velocityWindowMs:              600,
+        hardStopPercent:               48,
+        stagnationWindowMs:        240_000,
+        stagnationMinMove:             0.07,
+        timeStopAfterMs:           420_000,
+        timeStopMinPnl:               -0.08,
+        breakEvenAfterTrailingPercent: -1.5,
+        takeProfit: [
+          { levelPercent:   50, portion: 0.25 },
+          { levelPercent:  200, portion: 0.25 },
+          { levelPercent:  600, portion: 0.25 },
+          { levelPercent: 1500, portion: 0.25 },
+        ],
+      },
+    },
+
     // ── MAYHEM MODE ───────────────────────────────────────────────────────────
     mayhem: {
       delayMs:           300,
