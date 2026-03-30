@@ -39,7 +39,7 @@ export interface PriceTick {
 
 export interface TradeOpenPayload {
   mint: string;
-  protocol: 'pump.fun' | 'pumpswap' | 'mayhem';
+  protocol: 'pump.fun' | 'pumpswap' | 'mayhem' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4';
   entryPrice: number;
   amountSol: number;
   tokensReceived: number;
@@ -51,7 +51,7 @@ export interface TradeOpenPayload {
 
 export interface PartialSellPayload {
   mint: string;
-  protocol: 'pump.fun' | 'pumpswap' | 'mayhem';
+  protocol: 'pump.fun' | 'pumpswap' | 'mayhem' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4';
   tpLevelPercent: number;
   tpIndex: number;
   portion: number;
@@ -87,7 +87,7 @@ export type CloseReason =
 
 export interface TradeClosePayload {
   mint: string;
-  protocol: 'pump.fun' | 'pumpswap' | 'mayhem';
+  protocol: 'pump.fun' | 'pumpswap' | 'mayhem' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4';
   reason: CloseReason;
   urgent: boolean;
 
