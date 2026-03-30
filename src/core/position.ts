@@ -41,7 +41,7 @@ const MAX_PRICE_HISTORY = 2000;
 
 export class Position {
   public readonly mint: PublicKey;
-  public protocol: 'pump.fun' | 'pumpswap' | 'mayhem';
+  public protocol: 'pump.fun' | 'pumpswap' | 'mayhem' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4';
   public entryPrice: number;
   public entryAmountSol: number;
   public amount: number;
@@ -79,7 +79,7 @@ export class Position {
     decimals: number,
     options: {
       entryAmountSol?: number;
-      protocol?: 'pump.fun' | 'pumpswap' | 'mayhem';
+      protocol?: 'pump.fun' | 'pumpswap' | 'mayhem' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4';
       feeRecipientUsed?: string;
       creator?: string;
       openedAt?: number;
@@ -101,8 +101,11 @@ export class Position {
     this.drawdownStart = null;
     this.trailingActivated = false;
 
-    const initExit = this.protocol === 'pumpswap' ? config.strategy.pumpSwap.exit
-                   : this.protocol === 'mayhem'   ? config.strategy.mayhem.exit
+    const initExit = this.protocol === 'pumpswap'        ? config.strategy.pumpSwap.exit
+                   : this.protocol === 'mayhem'          ? config.strategy.mayhem.exit
+                   : this.protocol === 'raydium-launch'  ? config.strategy.raydiumLaunch.exit
+                   : this.protocol === 'raydium-cpmm'    ? config.strategy.raydiumCpmm.exit
+                   : this.protocol === 'raydium-ammv4'   ? config.strategy.raydiumAmmV4.exit
                    : config.strategy.pumpFun.exit;
     this.takeProfitLevels = initExit.takeProfit || [];
     this.takenLevels = new Set();
@@ -390,10 +393,13 @@ export class Position {
 
   private getExitConfig() {
     switch (this.protocol) {
-      case 'pump.fun': return config.strategy.pumpFun.exit;
-      case 'pumpswap': return config.strategy.pumpSwap.exit;
-      case 'mayhem':   return config.strategy.mayhem.exit;
-      default:         return config.strategy.exit;
+      case 'pump.fun':        return config.strategy.pumpFun.exit;
+      case 'pumpswap':        return config.strategy.pumpSwap.exit;
+      case 'mayhem':          return config.strategy.mayhem.exit;
+      case 'raydium-launch':  return config.strategy.raydiumLaunch.exit;
+      case 'raydium-cpmm':    return config.strategy.raydiumCpmm.exit;
+      case 'raydium-ammv4':   return config.strategy.raydiumAmmV4.exit;
+      default:                return config.strategy.exit;
     }
   }
 

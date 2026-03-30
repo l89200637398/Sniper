@@ -2,9 +2,12 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { getBondingCurvePDA } from '../trading/buy';
 import { getPoolPDAByMint as getPoolPDA } from '../trading/pumpSwap';
+import { resolveLaunchLabPool } from '../trading/raydiumLaunchLab';
+import { resolveCpmmPool } from '../trading/raydiumCpmm';
+import { resolveAmmV4Pool } from '../trading/raydiumAmmV4';
 import { logger } from '../utils/logger';
 
-export type ProtocolType = 'pumpfun' | 'pumpswap' | 'unknown';
+export type ProtocolType = 'pumpfun' | 'pumpswap' | 'raydium-launch' | 'raydium-cpmm' | 'raydium-ammv4' | 'unknown';
 
 export interface ProtocolInfo {
   protocol: ProtocolType;
@@ -54,6 +57,48 @@ export async function detectProtocol(
       pool,
       exists: true,
     };
+  }
+
+  // Проверяем Raydium LaunchLab (bonding curve)
+  try {
+    const launchResult = await resolveLaunchLabPool(connection, mint);
+    if (launchResult) {
+      return {
+        protocol: 'raydium-launch',
+        pool: launchResult.poolId,
+        exists: true,
+      };
+    }
+  } catch (e) {
+    logger.debug(`detectProtocol: raydium-launch check failed for ${mint.toBase58()}: ${e}`);
+  }
+
+  // Проверяем Raydium CPMM
+  try {
+    const cpmmResult = await resolveCpmmPool(connection, mint);
+    if (cpmmResult) {
+      return {
+        protocol: 'raydium-cpmm',
+        pool: cpmmResult.poolId,
+        exists: true,
+      };
+    }
+  } catch (e) {
+    logger.debug(`detectProtocol: raydium-cpmm check failed for ${mint.toBase58()}: ${e}`);
+  }
+
+  // Проверяем Raydium AMM v4
+  try {
+    const ammV4Result = await resolveAmmV4Pool(connection, mint);
+    if (ammV4Result) {
+      return {
+        protocol: 'raydium-ammv4',
+        pool: ammV4Result.poolId,
+        exists: true,
+      };
+    }
+  } catch (e) {
+    logger.debug(`detectProtocol: raydium-ammv4 check failed for ${mint.toBase58()}: ${e}`);
   }
 
   return { protocol: 'unknown', exists: false };

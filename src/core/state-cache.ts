@@ -19,6 +19,11 @@ export interface MintState {
   // Mayhem Mode флаг — читается из bonding curve data[81], кешируется здесь
   // чтобы не делать повторный RPC-вызов при каждом executePendingBuy
   isMayhemMode?: boolean;
+  // Raydium protocol flags
+  isRaydiumLaunch?: boolean;
+  isRaydiumCpmm?: boolean;
+  isRaydiumAmmV4?: boolean;
+  raydiumPool?: PublicKey;
 }
 
 const cache = new Map<string, MintState>();

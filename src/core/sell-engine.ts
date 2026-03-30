@@ -2,6 +2,9 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { sellToken } from '../trading/sell';
 import { sellTokenPumpSwap } from '../trading/pumpSwap';
+import { sellTokenLaunchLab } from '../trading/raydiumLaunchLab';
+import { sellTokenCpmm } from '../trading/raydiumCpmm';
+import { sellTokenAmmV4 } from '../trading/raydiumAmmV4';
 import { isMigrated } from './migration';
 import { getMintState } from './state-cache';
 import {
@@ -35,6 +38,24 @@ export async function sellTokenAuto(
   directRpc: boolean = false       // ← НОВОЕ: bypass Jito, send via sendRawTransaction
 ): Promise<string> {
   const state = getMintState(mint);
+
+  // ── Raydium LaunchLab path ────────────────────────────────────────────────
+  if (state.isRaydiumLaunch) {
+    logger.debug(`sellTokenAuto: ${mint.toBase58().slice(0, 8)}... → Raydium LaunchLab`);
+    return sellTokenLaunchLab(connection, mint, payer, amountRaw, slippageBps);
+  }
+
+  // ── Raydium CPMM path ────────────────────────────────────────────────────
+  if (state.isRaydiumCpmm) {
+    logger.debug(`sellTokenAuto: ${mint.toBase58().slice(0, 8)}... → Raydium CPMM`);
+    return sellTokenCpmm(connection, mint, payer, amountRaw, slippageBps);
+  }
+
+  // ── Raydium AMM v4 path ──────────────────────────────────────────────────
+  if (state.isRaydiumAmmV4) {
+    logger.debug(`sellTokenAuto: ${mint.toBase58().slice(0, 8)}... → Raydium AMM v4`);
+    return sellTokenAmmV4(connection, mint, payer, amountRaw, slippageBps);
+  }
 
   // ── PumpSwap path ─────────────────────────────────────────────────────────
   if (state.isPumpSwap) {
