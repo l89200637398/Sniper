@@ -7,7 +7,11 @@ import { config } from '../config';
 import path from 'path';
 import bs58 from 'bs58';
 import { logger } from '../utils/logger';
-import { PUMP_FUN_PROGRAM_ID, PUMP_SWAP_PROGRAM_ID, DISCRIMINATOR, PUMP_FUN_ROUTER_PROGRAM_ID } from '../constants';
+import {
+    PUMP_FUN_PROGRAM_ID, PUMP_SWAP_PROGRAM_ID, DISCRIMINATOR, PUMP_FUN_ROUTER_PROGRAM_ID,
+    RAYDIUM_LAUNCHLAB_PROGRAM_ID, RAYDIUM_CPMM_PROGRAM_ID, RAYDIUM_AMM_V4_PROGRAM_ID,
+    RAYDIUM_FEE_DESTINATION, RAYDIUM_DISCRIMINATOR,
+} from '../constants';
 import { TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
 
 const PROTO_PATH = path.join(__dirname, '../../proto/geyser.proto');
@@ -27,6 +31,13 @@ export interface PumpSwapNewPool { mint: string; pool: string; creator: string; 
 export interface PumpSwapBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
 export interface PumpSwapSell { mint: string; creator: string; amount: bigint; signature: string; }
 export interface PumpFunSell { mint: string; seller: string; amount: bigint; signature: string; }
+
+// --- Raydium интерфейсы ---
+export interface RaydiumLaunchCreate { mint: string; pool: string; creator: string; signature: string; receivedAt: number; }
+export interface RaydiumLaunchBuy { mint: string; pool: string; buyer: string; amountSol: bigint; signature: string; }
+export interface RaydiumLaunchSell { mint: string; pool: string; seller: string; amountTokens: bigint; signature: string; }
+export interface RaydiumCpmmNewPool { mint: string; pool: string; creator: string; signature: string; }
+export interface RaydiumAmmV4NewPool { pool: string; baseMint: string; quoteMint: string; signature: string; }
 
 function pubkeyToBuffer(pubkey: any): Buffer | null {
     try {
@@ -53,6 +64,10 @@ export class GeyserClient extends EventEmitter {
     private readonly PUMP_PROGRAM = PUMP_FUN_PROGRAM_ID;
     private readonly PUMP_SWAP = PUMP_SWAP_PROGRAM_ID;
     private readonly PUMP_ROUTER = PUMP_FUN_ROUTER_PROGRAM_ID; // ← добавлен роутер
+    private readonly RAYDIUM_LAUNCH = RAYDIUM_LAUNCHLAB_PROGRAM_ID;
+    private readonly RAYDIUM_CPMM = RAYDIUM_CPMM_PROGRAM_ID;
+    private readonly RAYDIUM_AMM_V4 = RAYDIUM_AMM_V4_PROGRAM_ID;
+    private readonly RAYDIUM_FEE_DEST = RAYDIUM_FEE_DESTINATION;
 
     private eventQueue: Array<{ data: any }> = [];
     private processing = false;
@@ -149,6 +164,8 @@ export class GeyserClient extends EventEmitter {
                 this.PUMP_SWAP,
                 TOKEN_2022_PROGRAM_ID.toBase58(),
                 this.PUMP_ROUTER, // ← добавили роутер
+                this.RAYDIUM_LAUNCH,  // ← Raydium LaunchLab
+                this.RAYDIUM_CPMM,    // ← Raydium CPMM
             ],
         };
         if (accountAddresses.length > 0) {
@@ -164,7 +181,10 @@ export class GeyserClient extends EventEmitter {
                 pump_fun_and_swap_filter: {
                     vote: false,
                     failed: false,
-                    account_include: [this.PUMP_PROGRAM, this.PUMP_SWAP, this.PUMP_ROUTER],
+                    account_include: [
+                        this.PUMP_PROGRAM, this.PUMP_SWAP, this.PUMP_ROUTER,
+                        this.RAYDIUM_LAUNCH, this.RAYDIUM_CPMM, this.RAYDIUM_FEE_DEST,
+                    ],
                 },
             },
             blocks: {},
@@ -381,6 +401,27 @@ export class GeyserClient extends EventEmitter {
             // PumpSwap (без изменений)
             if (programId === this.PUMP_SWAP) {
                 this.parsePumpSwapInstruction(ix, message, signature, data, slot);
+            }
+
+            // ── Raydium LaunchLab ────────────────────────────────────────────
+            if (programId === this.RAYDIUM_LAUNCH && data.length >= 8) {
+                this.parseRaydiumLaunchInstruction(ix, message, signature, data, slot);
+            }
+
+            // ── Raydium CPMM — детекция новых пулов ──────────────────────────
+            if (programId === this.RAYDIUM_CPMM && data.length >= 8) {
+                const disc = data.subarray(0, 8);
+                if (disc.equals(RAYDIUM_DISCRIMINATOR.CPMM_CREATE_POOL)) {
+                    this.parseRaydiumCpmmCreatePool(ix, message, signature, slot);
+                }
+            }
+
+            // ── Raydium AMM v4 — детекция новых пулов по fee destination ─────
+            // AMM v4 использует instruction index (первый байт), не Anchor disc
+            if (programId === this.RAYDIUM_AMM_V4 && data.length >= 1) {
+                if (data[0] === RAYDIUM_DISCRIMINATOR.AMM_V4_CREATE_POOL_INDEX) {
+                    this.parseRaydiumAmmV4CreatePool(ix, message, signature, slot);
+                }
             }
         }
     }
@@ -600,6 +641,183 @@ export class GeyserClient extends EventEmitter {
             amount:   tokenAmount,
             signature,
         });
+    }
+
+    // ═══ Raydium LaunchLab parsing ══════════════════════════════════════════════
+
+    private parseRaydiumLaunchInstruction(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        const disc = data.subarray(0, 8);
+
+        if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_INITIALIZE_V2)) {
+            this.parseRaydiumLaunchCreate(ix, message, signature, slot);
+        } else if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_BUY_EXACT_IN) ||
+                   disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_BUY_EXACT_OUT)) {
+            this.parseRaydiumLaunchBuy(ix, message, signature, data, slot);
+        } else if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_SELL_EXACT_IN) ||
+                   disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_SELL_EXACT_OUT)) {
+            this.parseRaydiumLaunchSell(ix, message, signature, data, slot);
+        }
+    }
+
+    private parseRaydiumLaunchCreate(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // InitializeV2 accounts:
+            //   [0] payer (signer), [1] creator, [4] auth, [5] poolId, [6] mintA (signer)
+            const creatorIndex = ix.accounts?.[1];
+            const poolIndex    = ix.accounts?.[5];
+            const mintIndex    = ix.accounts?.[6];
+
+            if (mintIndex === undefined || poolIndex === undefined) return;
+
+            const mint    = this.keyToString(message.accountKeys[mintIndex]);
+            const pool    = this.keyToString(message.accountKeys[poolIndex]);
+            const creator = creatorIndex !== undefined ? this.keyToString(message.accountKeys[creatorIndex]) : '';
+
+            if (!mint || !pool) return;
+
+            logger.info(`🚀 RAYDIUM LAUNCHLAB CREATE: mint=${mint.slice(0,8)}, pool=${pool.slice(0,8)}, creator=${creator.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumLaunchCreate', {
+                mint,
+                pool,
+                creator,
+                signature,
+                receivedAt: Date.now(),
+            } as RaydiumLaunchCreate);
+        } catch (err) {
+            logger.error('Error handling Raydium LaunchLab CREATE:', err);
+        }
+    }
+
+    private parseRaydiumLaunchBuy(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        try {
+            // BuyExactIn: [0] owner, [4] poolId, [9] mintA
+            // Args @ offset 8: amountB (u64) = SOL
+            const buyerIndex = ix.accounts?.[0];
+            const poolIndex  = ix.accounts?.[4];
+            const mintIndex  = ix.accounts?.[9];
+
+            if (mintIndex === undefined || poolIndex === undefined) return;
+
+            const mint   = this.keyToString(message.accountKeys[mintIndex]);
+            const pool   = this.keyToString(message.accountKeys[poolIndex]);
+            const buyer  = buyerIndex !== undefined ? this.keyToString(message.accountKeys[buyerIndex]) : '';
+            const amountSol = data.length >= 16 ? data.readBigUInt64LE(8) : 0n;
+
+            if (!mint) return;
+
+            logger.info(`💰 RAYDIUM LAUNCH BUY: ${mint.slice(0,8)}, sol=${Number(amountSol)/1e9}, buyer=${buyer.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumLaunchBuyDetected', {
+                mint,
+                pool,
+                buyer,
+                amountSol,
+                signature,
+            } as RaydiumLaunchBuy);
+        } catch (err) {
+            logger.error('Error handling Raydium LaunchLab BUY:', err);
+        }
+    }
+
+    private parseRaydiumLaunchSell(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        try {
+            // SellExactIn: [0] owner, [4] poolId, [9] mintA
+            // Args @ offset 8: amountA (u64) = tokens
+            const sellerIndex = ix.accounts?.[0];
+            const poolIndex   = ix.accounts?.[4];
+            const mintIndex   = ix.accounts?.[9];
+
+            if (mintIndex === undefined) return;
+
+            const mint   = this.keyToString(message.accountKeys[mintIndex]);
+            const pool   = poolIndex !== undefined ? this.keyToString(message.accountKeys[poolIndex]) : '';
+            const seller = sellerIndex !== undefined ? this.keyToString(message.accountKeys[sellerIndex]) : '';
+            const amountTokens = data.length >= 16 ? data.readBigUInt64LE(8) : 0n;
+
+            if (!mint) return;
+
+            logger.debug(`📤 RAYDIUM LAUNCH SELL: ${mint.slice(0,8)}, seller=${seller.slice(0,8)}, tokens=${amountTokens}, slot=${slot}`);
+            this.emit('raydiumLaunchSellDetected', {
+                mint,
+                pool,
+                seller,
+                amountTokens,
+                signature,
+            } as RaydiumLaunchSell);
+        } catch (err) {
+            logger.error('Error handling Raydium LaunchLab SELL:', err);
+        }
+    }
+
+    // ═══ Raydium CPMM new pool detection ═════════════════════════════════════════
+
+    private parseRaydiumCpmmCreatePool(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // CreatePool accounts (20): [0] creator, [4] pool, [5] mintA, [6] mintB
+            const poolIndex  = ix.accounts?.[4];
+            const mintAIndex = ix.accounts?.[5];
+            const mintBIndex = ix.accounts?.[6];
+            const creatorIndex = ix.accounts?.[0];
+
+            if (poolIndex === undefined || mintAIndex === undefined || mintBIndex === undefined) return;
+
+            const pool    = this.keyToString(message.accountKeys[poolIndex]);
+            const mintA   = this.keyToString(message.accountKeys[mintAIndex]);
+            const mintB   = this.keyToString(message.accountKeys[mintBIndex]);
+            const creator = creatorIndex !== undefined ? this.keyToString(message.accountKeys[creatorIndex]) : '';
+
+            // Определяем meme token — один из пары является wSOL
+            let mint: string;
+            if (mintA === config.wsolMint) {
+                mint = mintB;
+            } else if (mintB === config.wsolMint) {
+                mint = mintA;
+            } else {
+                logger.debug(`[raydium-cpmm] create_pool без wSOL: mintA=${mintA?.slice(0,8)} mintB=${mintB?.slice(0,8)}`);
+                return;
+            }
+            if (!mint) return;
+
+            logger.info(`🆕 RAYDIUM CPMM POOL: mint=${mint.slice(0,8)}, pool=${pool.slice(0,8)}, creator=${creator.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumCpmmNewPool', {
+                mint,
+                pool,
+                creator,
+                signature,
+            } as RaydiumCpmmNewPool);
+        } catch (err) {
+            logger.error('Error handling Raydium CPMM create_pool:', err);
+        }
+    }
+
+    // ═══ Raydium AMM v4 new pool detection ═══════════════════════════════════════
+
+    private parseRaydiumAmmV4CreatePool(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // AMM v4 create pool: instruction data[0] == 1
+            // Account indices from raydium-sdk-V2-demo/src/grpc/subNewAmmPool.ts:
+            //   [4] poolId, [8] baseMint, [9] quoteMint
+            const poolIndex      = ix.accounts?.[4];
+            const baseMintIndex  = ix.accounts?.[8];
+            const quoteMintIndex = ix.accounts?.[9];
+
+            if (poolIndex === undefined || baseMintIndex === undefined || quoteMintIndex === undefined) return;
+
+            const pool      = this.keyToString(message.accountKeys[poolIndex]);
+            const baseMint  = this.keyToString(message.accountKeys[baseMintIndex]);
+            const quoteMint = this.keyToString(message.accountKeys[quoteMintIndex]);
+
+            if (!pool || !baseMint || !quoteMint) return;
+
+            logger.info(`🆕 RAYDIUM AMM V4 POOL: base=${baseMint.slice(0,8)}, quote=${quoteMint.slice(0,8)}, pool=${pool.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumAmmV4NewPool', {
+                pool,
+                baseMint,
+                quoteMint,
+                signature,
+            } as RaydiumAmmV4NewPool);
+        } catch (err) {
+            logger.error('Error handling Raydium AMM v4 create_pool:', err);
+        }
     }
 
     stop() {
