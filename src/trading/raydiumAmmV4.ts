@@ -1,0 +1,380 @@
+// src/trading/raydiumAmmV4.ts
+//
+// Raydium AMM v4 — legacy constant product AMM swap
+//
+// Протокол: 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8
+// Формула: x * y = k, fee 25 bps (фиксированная, numerator=25, denominator=10000)
+// Используется для:
+//   1. Торговли после миграции LaunchLab (migrateType=0)
+//   2. Торговли на любых AMM v4 пулах Raydium (основной DEX Solana)
+//
+// Инструкции:
+//   SwapBaseInV2:  instruction index 16 (без OpenBook accounts)
+//   SwapBaseOutV2: instruction index 17 (без OpenBook accounts)
+//
+// Аккаунты swap V2 (8):
+//   0  tokenProgram
+//   1  poolId (writable)
+//   2  authority (PDA, nonce из pool state)
+//   3  vaultA (writable) — coin vault
+//   4  vaultB (writable) — pc vault
+//   5  userInputTokenAccount (writable)
+//   6  userOutputTokenAccount (writable)
+//   7  owner (signer)
+//
+// Источники:
+//   - raydium-sdk-V2/src/raydium/liquidity/instruction.ts
+//   - raydium-sdk-V2/src/raydium/liquidity/layout.ts
+//   - raydium-sdk-V2-demo/src/grpc/subNewAmmPool.ts
+
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  TransactionInstruction,
+  VersionedTransaction,
+  TransactionMessage,
+  ComputeBudgetProgram,
+} from '@solana/web3.js';
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
+import { config }                        from '../config';
+import { queueJitoSend }                 from '../infra/jito-queue';
+import { getCachedBlockhashWithHeight }  from '../infra/blockhash-cache';
+import { getCachedPriorityFee }          from '../infra/priority-fee-cache';
+import { logger }                        from '../utils/logger';
+import { ensureSufficientBalance, estimateTransactionFee } from '../utils/balance';
+import { withRetry }                     from '../utils/retry';
+import { withRpcLimit }                  from '../utils/rpc-limiter';
+import {
+  RAYDIUM_AMM_V4_PROGRAM_ID,
+  RAYDIUM_DISCRIMINATOR,
+  RAYDIUM_AMM_V4_POOL_LAYOUT,
+} from '../constants';
+
+const AMM_V4_PROGRAM = new PublicKey(RAYDIUM_AMM_V4_PROGRAM_ID);
+const WSOL_MINT      = new PublicKey(config.wsolMint);
+const FEE_BPS        = 25n; // фиксированная fee 25 bps для AMM v4
+
+function encodeU64(v: bigint): Buffer {
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(v);
+  return buf;
+}
+
+// ─── Pool state parser ───────────────────────────────────────────────────────
+
+export interface AmmV4PoolState {
+  status:          bigint;
+  nonce:           bigint;   // для authority PDA
+  baseDecimal:     bigint;
+  quoteDecimal:    bigint;
+  tradeFeeNum:     bigint;
+  tradeFeeDen:     bigint;
+  baseVault:       PublicKey;
+  quoteVault:      PublicKey;
+  baseMint:        PublicKey;
+  quoteMint:       PublicKey;
+  lpMint:          PublicKey;
+  openOrders:      PublicKey;
+  marketId:        PublicKey;
+  marketProgramId: PublicKey;
+  targetOrders:    PublicKey;
+}
+
+export function parseAmmV4Pool(data: Buffer): AmmV4PoolState {
+  const L = RAYDIUM_AMM_V4_POOL_LAYOUT;
+  if (data.length < L.TARGET_ORDERS_OFFSET + 32) {
+    throw new Error(`AMM v4 pool data too short: ${data.length} bytes`);
+  }
+
+  return {
+    status:          data.readBigUInt64LE(L.STATUS_OFFSET),
+    nonce:           data.readBigUInt64LE(L.NONCE_OFFSET),
+    baseDecimal:     data.readBigUInt64LE(L.BASE_DECIMAL_OFFSET),
+    quoteDecimal:    data.readBigUInt64LE(L.QUOTE_DECIMAL_OFFSET),
+    tradeFeeNum:     data.readBigUInt64LE(L.TRADE_FEE_NUM_OFFSET),
+    tradeFeeDen:     data.readBigUInt64LE(L.TRADE_FEE_DEN_OFFSET),
+    baseVault:       new PublicKey(data.subarray(L.BASE_VAULT_OFFSET, L.BASE_VAULT_OFFSET + 32)),
+    quoteVault:      new PublicKey(data.subarray(L.QUOTE_VAULT_OFFSET, L.QUOTE_VAULT_OFFSET + 32)),
+    baseMint:        new PublicKey(data.subarray(L.BASE_MINT_OFFSET, L.BASE_MINT_OFFSET + 32)),
+    quoteMint:       new PublicKey(data.subarray(L.QUOTE_MINT_OFFSET, L.QUOTE_MINT_OFFSET + 32)),
+    lpMint:          new PublicKey(data.subarray(L.LP_MINT_OFFSET, L.LP_MINT_OFFSET + 32)),
+    openOrders:      new PublicKey(data.subarray(L.OPEN_ORDERS_OFFSET, L.OPEN_ORDERS_OFFSET + 32)),
+    marketId:        new PublicKey(data.subarray(L.MARKET_ID_OFFSET, L.MARKET_ID_OFFSET + 32)),
+    marketProgramId: new PublicKey(data.subarray(L.MARKET_PROGRAM_ID_OFFSET, L.MARKET_PROGRAM_ID_OFFSET + 32)),
+    targetOrders:    new PublicKey(data.subarray(L.TARGET_ORDERS_OFFSET, L.TARGET_ORDERS_OFFSET + 32)),
+  };
+}
+
+// ─── Authority PDA ───────────────────────────────────────────────────────────
+// AMM v4 authority = PDA с nonce из pool state
+
+function getAmmAuthority(nonce: number): PublicKey {
+  const nonceBuf = Buffer.alloc(8);
+  nonceBuf.writeBigUInt64LE(BigInt(nonce));
+  // AMM v4 authority: seeds = [amm seed bytes depending on nonce]
+  // Standard approach: findProgramAddress with nonce as u64 LE seed
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from([97, 109, 109, 32, 97, 117, 116, 104, 111, 114, 105, 116, 121])], // "amm authority" — not standard
+    AMM_V4_PROGRAM,
+  )[0];
+}
+
+// Raydium AMM v4 authority — хардкод для mainnet (nonce=252, всегда один и тот же)
+// Источник: проверено через реальные транзакции, Solscan
+const AMM_V4_AUTHORITY = new PublicKey('5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1');
+
+// ─── AMM math ─────────────────────────────────────────────────────────────────
+
+/** Compute output: amountOut = amountIn * (1 - fee) * reserveOut / (reserveIn + amountIn * (1 - fee)) */
+export function computeSwapOut(
+  amountIn:   bigint,
+  reserveIn:  bigint,
+  reserveOut: bigint,
+  feeNum:     bigint = FEE_BPS,
+  feeDen:     bigint = 10000n,
+): bigint {
+  if (reserveIn === 0n || reserveOut === 0n) throw new Error('Zero reserves');
+  const amountInAfterFee = amountIn * (feeDen - feeNum);
+  return (amountInAfterFee * reserveOut) / (reserveIn * feeDen + amountInAfterFee);
+}
+
+// ─── Build swap instruction (SwapBaseInV2) ───────────────────────────────────
+//
+// Instruction index 16 (первый байт data = 16, не Anchor discriminator)
+// Args: amountIn (u64), minAmountOut (u64)
+
+export function buildAmmV4SwapBaseInInstruction(
+  pool:              AmmV4PoolState,
+  poolId:            PublicKey,
+  user:              PublicKey,
+  userInputAta:      PublicKey,
+  userOutputAta:     PublicKey,
+  amountIn:          bigint,
+  minAmountOut:      bigint,
+): TransactionInstruction {
+  // Data layout: instruction_index (u8) + amountIn (u64) + minAmountOut (u64) = 17 bytes
+  const data = Buffer.alloc(17);
+  data.writeUInt8(RAYDIUM_DISCRIMINATOR.AMM_V4_SWAP_BASE_IN_V2_INDEX, 0); // 16
+  data.writeBigUInt64LE(amountIn, 1);
+  data.writeBigUInt64LE(minAmountOut, 9);
+
+  const keys = [
+    { pubkey: TOKEN_PROGRAM_ID,  isSigner: false, isWritable: false }, // 0
+    { pubkey: poolId,            isSigner: false, isWritable: true  }, // 1
+    { pubkey: AMM_V4_AUTHORITY,  isSigner: false, isWritable: false }, // 2
+    { pubkey: pool.baseVault,    isSigner: false, isWritable: true  }, // 3 coin vault
+    { pubkey: pool.quoteVault,   isSigner: false, isWritable: true  }, // 4 pc vault
+    { pubkey: userInputAta,      isSigner: false, isWritable: true  }, // 5
+    { pubkey: userOutputAta,     isSigner: false, isWritable: true  }, // 6
+    { pubkey: user,              isSigner: true,  isWritable: false }, // 7
+  ];
+
+  return new TransactionInstruction({ programId: AMM_V4_PROGRAM, keys, data });
+}
+
+// ─── Resolve pool ────────────────────────────────────────────────────────────
+
+export async function resolveAmmV4Pool(
+  connection: Connection,
+  mint:       PublicKey,
+  poolHint?:  PublicKey,
+): Promise<{
+  poolId:       PublicKey;
+  pool:         AmmV4PoolState;
+  tokenReserve: bigint;
+  solReserve:   bigint;
+  isBaseMint:   boolean;
+}> {
+  let poolId  = poolHint;
+  let poolAcc: import('@solana/web3.js').AccountInfo<Buffer> | null = null;
+
+  if (poolId) {
+    poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(poolId!)));
+  }
+
+  // Fallback: getProgramAccounts по baseMint/quoteMint
+  if (!poolAcc) {
+    const L = RAYDIUM_AMM_V4_POOL_LAYOUT;
+    for (const offset of [L.BASE_MINT_OFFSET, L.QUOTE_MINT_OFFSET]) {
+      try {
+        const accounts = await connection.getProgramAccounts(AMM_V4_PROGRAM, {
+          commitment: 'confirmed',
+          filters: [{ memcmp: { offset, bytes: mint.toBase58() } }],
+        });
+        if (accounts.length > 0) {
+          poolId  = accounts[0].pubkey;
+          poolAcc = accounts[0].account;
+          break;
+        }
+      } catch (e) {
+        logger.warn(`AMM v4 getProgramAccounts failed (offset ${offset}): ${e}`);
+      }
+    }
+  }
+
+  if (!poolAcc || !poolId) throw new Error(`AMM v4 pool not found for ${mint.toBase58()}`);
+
+  const pool = parseAmmV4Pool(poolAcc.data);
+  const isBaseMint = pool.baseMint.equals(mint);
+
+  const [baseBalance, quoteBalance] = await Promise.all([
+    withRpcLimit(() => connection.getTokenAccountBalance(pool.baseVault)),
+    withRpcLimit(() => connection.getTokenAccountBalance(pool.quoteVault)),
+  ]);
+
+  const tokenReserve = isBaseMint
+    ? BigInt(baseBalance.value.amount)
+    : BigInt(quoteBalance.value.amount);
+  const solReserve = isBaseMint
+    ? BigInt(quoteBalance.value.amount)
+    : BigInt(baseBalance.value.amount);
+
+  return { poolId, pool, tokenReserve, solReserve, isBaseMint };
+}
+
+// ─── buyTokenAmmV4 ───────────────────────────────────────────────────────────
+
+export async function buyTokenAmmV4(
+  connection:  Connection,
+  mint:        PublicKey,
+  payer:       Keypair,
+  solAmount:   number,
+  slippageBps: number,
+  poolHint?:   PublicKey,
+): Promise<string> {
+  const owner       = payer.publicKey;
+  const priorityFee = getCachedPriorityFee();
+  const maxTip      = config.jito.maxTipAmountSol;
+  const estFee      = estimateTransactionFee(2, config.compute.unitLimit, priorityFee);
+
+  await ensureSufficientBalance(connection, owner, solAmount + maxTip + estFee / 1e9 + 0.003);
+
+  const { poolId, pool, tokenReserve, solReserve, isBaseMint } =
+    await resolveAmmV4Pool(connection, mint, poolHint);
+
+  const solIn       = BigInt(Math.floor(solAmount * 1e9));
+  const feeNum      = pool.tradeFeeNum > 0n ? pool.tradeFeeNum : FEE_BPS;
+  const feeDen      = pool.tradeFeeDen > 0n ? pool.tradeFeeDen : 10000n;
+  const expectedOut = computeSwapOut(solIn, solReserve, tokenReserve, feeNum, feeDen);
+  const minOut      = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
+
+  // AMM v4: vaultA=baseVault(coin), vaultB=quoteVault(pc)
+  // Buy: input=wSOL (quote side), output=token (base side)
+  const userWsolAta  = getAssociatedTokenAddressSync(WSOL_MINT, owner, false, TOKEN_PROGRAM_ID);
+  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
+
+  const buildTx = async (): Promise<VersionedTransaction> => {
+    const { blockhash } = await getCachedBlockhashWithHeight();
+    const instructions = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner, userTokenAta, owner, mint, TOKEN_PROGRAM_ID,
+      ),
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner, userWsolAta, owner, WSOL_MINT, TOKEN_PROGRAM_ID,
+      ),
+      SystemProgram.transfer({ fromPubkey: owner, toPubkey: userWsolAta, lamports: solIn }),
+      createSyncNativeInstruction(userWsolAta),
+      buildAmmV4SwapBaseInInstruction(
+        pool, poolId, owner,
+        userWsolAta,   // input = wSOL
+        userTokenAta,  // output = token
+        solIn, minOut,
+      ),
+    ];
+    const message = new TransactionMessage({
+      payerKey: owner, recentBlockhash: blockhash, instructions,
+    }).compileToV0Message();
+    const tx = new VersionedTransaction(message);
+    tx.sign([payer]);
+    return tx;
+  };
+
+  if (process.env.SIMULATE === 'true') {
+    const sim = await connection.simulateTransaction(await buildTx());
+    if (sim.value.err) throw new Error(`AMM v4 buy sim failed: ${JSON.stringify(sim.value.err)}`);
+    logger.debug('AMM v4 buy simulation OK');
+  }
+
+  const txId = await queueJitoSend(buildTx, payer, 0, true);
+  logger.info(`AMM v4 buy sent: ${txId} (${solAmount} SOL)`);
+  return txId;
+}
+
+// ─── sellTokenAmmV4 ──────────────────────────────────────────────────────────
+
+export async function sellTokenAmmV4(
+  connection:      Connection,
+  mint:            PublicKey,
+  payer:           Keypair,
+  tokenAmountRaw:  bigint,
+  slippageBps:     number,
+  directRpc:       boolean = false,
+  poolHint?:       PublicKey,
+): Promise<string> {
+  const owner       = payer.publicKey;
+  const priorityFee = getCachedPriorityFee();
+  const maxTip      = config.jito.maxTipAmountSol;
+  const estFee      = estimateTransactionFee(2, config.compute.unitLimit, priorityFee);
+
+  await ensureSufficientBalance(connection, owner, maxTip + estFee / 1e9 + 0.001);
+
+  const { poolId, pool, tokenReserve, solReserve } =
+    await resolveAmmV4Pool(connection, mint, poolHint);
+
+  const feeNum      = pool.tradeFeeNum > 0n ? pool.tradeFeeNum : FEE_BPS;
+  const feeDen      = pool.tradeFeeDen > 0n ? pool.tradeFeeDen : 10000n;
+  const expectedSol = computeSwapOut(tokenAmountRaw, tokenReserve, solReserve, feeNum, feeDen);
+  const minSolOut   = (expectedSol * BigInt(10000 - slippageBps)) / 10000n;
+
+  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
+  const userWsolAta  = getAssociatedTokenAddressSync(WSOL_MINT, owner, false, TOKEN_PROGRAM_ID);
+
+  const buildTx = async (): Promise<VersionedTransaction> => {
+    const { blockhash } = await getCachedBlockhashWithHeight();
+    const instructions = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
+      createAssociatedTokenAccountIdempotentInstruction(
+        owner, userWsolAta, owner, WSOL_MINT, TOKEN_PROGRAM_ID,
+      ),
+      buildAmmV4SwapBaseInInstruction(
+        pool, poolId, owner,
+        userTokenAta,  // input = token
+        userWsolAta,   // output = wSOL
+        tokenAmountRaw, minSolOut,
+      ),
+    ];
+    const message = new TransactionMessage({
+      payerKey: owner, recentBlockhash: blockhash, instructions,
+    }).compileToV0Message();
+    const tx = new VersionedTransaction(message);
+    tx.sign([payer]);
+    return tx;
+  };
+
+  if (process.env.SIMULATE === 'true') {
+    const sim = await connection.simulateTransaction(await buildTx());
+    if (sim.value.err) throw new Error(`AMM v4 sell sim failed: ${JSON.stringify(sim.value.err)}`);
+    logger.debug('AMM v4 sell simulation OK');
+  }
+
+  if (directRpc) {
+    const tx  = await buildTx();
+    const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 2 });
+    logger.info(`AMM v4 sell via direct RPC: ${sig}`);
+    return sig;
+  }
+
+  const txId = await queueJitoSend(buildTx, payer, config.jito.maxRetries, false);
+  logger.info(`AMM v4 sell sent: ${txId} (~${Number(expectedSol) / 1e9} SOL)`);
+  return txId;
+}
