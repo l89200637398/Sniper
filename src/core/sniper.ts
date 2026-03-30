@@ -34,7 +34,15 @@ import {
   PumpSwapNewPool,
   PumpSwapBuy,
   PumpSwapSell,
+  RaydiumLaunchCreate,
+  RaydiumLaunchBuy,
+  RaydiumCpmmNewPool,
+  RaydiumAmmV4NewPool,
 } from '../geyser/client';
+import { buyTokenLaunchLab, parseLaunchLabPool } from '../trading/raydiumLaunchLab';
+import { buyTokenCpmm, parseCpmmPool } from '../trading/raydiumCpmm';
+import { buyTokenAmmV4, parseAmmV4Pool } from '../trading/raydiumAmmV4';
+import { RAYDIUM_LAUNCHLAB_PROGRAM_ID, RAYDIUM_CPMM_PROGRAM_ID, RAYDIUM_AMM_V4_PROGRAM_ID } from '../constants';
 import { updateMintState, getMintState, ensureAta } from './state-cache';
 import { logger } from '../utils/logger';
 import { isTokenSafeCached } from '../utils/safety';
@@ -58,9 +66,12 @@ const PUMP_PROGRAM_ID = new PublicKey(PUMP_FUN_PROGRAM_ID);
 const PUMP_ROUTER = new PublicKey(PUMP_FUN_ROUTER_PROGRAM_ID);
 const POSITIONS_FILE  = path.join(process.cwd(), 'data', 'positions.json');
 
-function getStrategyForProtocol(protocol: 'pump.fun' | 'pumpswap' | 'mayhem') {
-  if (protocol === 'pumpswap') return config.strategy.pumpSwap;
-  if (protocol === 'mayhem') return config.strategy.mayhem;
+function getStrategyForProtocol(protocol: string) {
+  if (protocol === 'pumpswap')       return config.strategy.pumpSwap;
+  if (protocol === 'mayhem')         return config.strategy.mayhem;
+  if (protocol === 'raydium-launch') return config.strategy.raydiumLaunch;
+  if (protocol === 'raydium-cpmm')   return config.strategy.raydiumCpmm;
+  if (protocol === 'raydium-ammv4')  return config.strategy.raydiumAmmV4;
   return config.strategy.pumpFun;
 }
 
@@ -154,6 +165,18 @@ export class Sniper {
 
   private get pumpSwapCount(): number {
     return [...this.positions.values()].filter(p => p.protocol === 'pumpswap').length;
+  }
+
+  private get raydiumLaunchCount(): number {
+    return [...this.positions.values()].filter(p => p.protocol === 'raydium-launch').length;
+  }
+
+  private get raydiumCpmmCount(): number {
+    return [...this.positions.values()].filter(p => p.protocol === 'raydium-cpmm').length;
+  }
+
+  private get raydiumAmmV4Count(): number {
+    return [...this.positions.values()].filter(p => p.protocol === 'raydium-ammv4').length;
   }
 
   // v3: подсчёт токенов одного creator за последние 60 сек (для scoring)
@@ -634,6 +657,12 @@ export class Sniper {
     this.geyser.on('accountUpdate',        this.onAccountUpdate.bind(this));
     this.geyser.on('buyDetected',          this.onBuyDetected.bind(this));
     this.geyser.on('pumpFunSellDetected',  this.onPumpFunSellDetected.bind(this));
+
+    // Raydium events
+    this.geyser.on('raydiumLaunchCreate',     this.onRaydiumLaunchCreate.bind(this));
+    this.geyser.on('raydiumLaunchBuyDetected', this.onRaydiumLaunchBuy.bind(this));
+    this.geyser.on('raydiumCpmmNewPool',      this.onRaydiumCpmmNewPool.bind(this));
+    this.geyser.on('raydiumAmmV4NewPool',     this.onRaydiumAmmV4NewPool.bind(this));
   }
 
   private async onAccountUpdate(update: { pubkey: PublicKey; data: Buffer; slot: number }) {
@@ -2629,6 +2658,178 @@ export class Sniper {
     }
   }
 
+  // ═══ Raydium Event Handlers ════════════════════════════════════════════════
+
+  private async onRaydiumLaunchCreate(event: RaydiumLaunchCreate) {
+    if (!this.running) return;
+    if (this.positions.size >= config.strategy.maxPositions) return;
+    if (this.raydiumLaunchCount >= config.strategy.maxRaydiumLaunchPositions) return;
+
+    const mintStr = event.mint;
+    if (this.seenMints.has(mintStr)) return;
+    if (this.positions.has(mintStr)) return;
+    if (this.pendingBuys.has(mintStr)) return;
+
+    this.seenMints.set(mintStr, Date.now());
+
+    logger.info(`🚀 RAYDIUM LAUNCH CREATE: ${mintStr.slice(0, 8)}, pool=${event.pool.slice(0, 8)}`);
+    logEvent('RAYDIUM_LAUNCH_CREATE', { mint: mintStr, pool: event.pool, creator: event.creator });
+
+    const mint = new PublicKey(mintStr);
+    updateMintState(mint, {
+      isRaydiumLaunch: true,
+      raydiumPool: new PublicKey(event.pool),
+      creator: new PublicKey(event.creator),
+    });
+
+    // Не входим сразу — ждём подтверждение спроса через buy event
+  }
+
+  private async onRaydiumLaunchBuy(event: RaydiumLaunchBuy) {
+    if (!this.running) return;
+    if (this.positions.size >= config.strategy.maxPositions) return;
+    if (this.raydiumLaunchCount >= config.strategy.maxRaydiumLaunchPositions) return;
+
+    const mintStr = event.mint;
+    if (this.positions.has(mintStr)) return;
+
+    const solAmount = Number(event.amountSol) / 1e9;
+    if (solAmount < config.strategy.minIndependentBuySol) return;
+
+    // Только если видели create для этого токена
+    if (!this.seenMints.has(mintStr)) return;
+
+    logger.info(`💰 RAYDIUM LAUNCH BUY: ${mintStr.slice(0, 8)}, sol=${solAmount.toFixed(4)}, buyer=${event.buyer.slice(0, 8)}`);
+    logEvent('RAYDIUM_LAUNCH_BUY', { mint: mintStr, sol: solAmount, buyer: event.buyer });
+
+    const mint = new PublicKey(mintStr);
+    const cfg = config.strategy.raydiumLaunch;
+
+    try {
+      const txId = await buyTokenLaunchLab(
+        this.connection, mint, this.payer, cfg.entryAmountSol, cfg.slippageBps,
+      );
+      logger.info(`🟢 Raydium LaunchLab buy sent: ${txId} for ${mintStr.slice(0, 8)}`);
+      logEvent('RAYDIUM_LAUNCH_BUY_SENT', { mint: mintStr, txId });
+
+      // Создаём оптимистичную позицию (amount=0 — обновится после подтверждения)
+      const position = new Position(
+        mint, cfg.entryAmountSol, 0,
+        { programId: 'raydium-launchlab', quoteMint: config.wsolMint },
+        6,
+        {
+          entryAmountSol: cfg.entryAmountSol,
+          protocol: 'raydium-launch',
+          creator: event.buyer,
+        }
+      );
+      this.positions.set(mintStr, position);
+      this.confirmedPositions.add(mintStr);
+      logger.info(`✅ RAYDIUM LAUNCH POSITION OPENED: ${mintStr.slice(0, 8)}`);
+      logEvent('POSITION_OPENED', { mint: mintStr, protocol: 'raydium-launch', entryAmountSol: cfg.entryAmountSol });
+    } catch (err) {
+      logger.error(`Failed to buy Raydium LaunchLab token ${mintStr.slice(0, 8)}: ${err}`);
+    }
+  }
+
+  private async onRaydiumCpmmNewPool(event: RaydiumCpmmNewPool) {
+    if (!this.running) return;
+    if (this.positions.size >= config.strategy.maxPositions) return;
+    if (this.raydiumCpmmCount >= config.strategy.maxRaydiumCpmmPositions) return;
+
+    const mintStr = event.mint;
+    if (this.seenMints.has(mintStr)) return;
+    if (this.positions.has(mintStr)) return;
+
+    this.seenMints.set(mintStr, Date.now());
+
+    logger.info(`🆕 RAYDIUM CPMM NEW POOL: ${mintStr.slice(0, 8)}, pool=${event.pool.slice(0, 8)}`);
+    logEvent('RAYDIUM_CPMM_NEW_POOL', { mint: mintStr, pool: event.pool, creator: event.creator });
+
+    const mint = new PublicKey(mintStr);
+    updateMintState(mint, {
+      isRaydiumCpmm: true,
+      raydiumPool: new PublicKey(event.pool),
+    });
+
+    const cfg = config.strategy.raydiumCpmm;
+
+    try {
+      const txId = await buyTokenCpmm(
+        this.connection, mint, this.payer, cfg.entryAmountSol, cfg.slippageBps,
+      );
+      logger.info(`🟢 Raydium CPMM buy sent: ${txId} for ${mintStr.slice(0, 8)}`);
+      logEvent('RAYDIUM_CPMM_BUY_SENT', { mint: mintStr, txId });
+
+      const position = new Position(
+        mint, cfg.entryAmountSol, 0,
+        { programId: 'raydium-cpmm', quoteMint: config.wsolMint },
+        6,
+        {
+          entryAmountSol: cfg.entryAmountSol,
+          protocol: 'raydium-cpmm',
+          creator: event.creator,
+        }
+      );
+      this.positions.set(mintStr, position);
+      this.confirmedPositions.add(mintStr);
+      logger.info(`✅ RAYDIUM CPMM POSITION OPENED: ${mintStr.slice(0, 8)}`);
+      logEvent('POSITION_OPENED', { mint: mintStr, protocol: 'raydium-cpmm', entryAmountSol: cfg.entryAmountSol });
+    } catch (err) {
+      logger.error(`Failed to buy Raydium CPMM token ${mintStr.slice(0, 8)}: ${err}`);
+    }
+  }
+
+  private async onRaydiumAmmV4NewPool(event: RaydiumAmmV4NewPool) {
+    if (!this.running) return;
+    if (this.positions.size >= config.strategy.maxPositions) return;
+    if (this.raydiumAmmV4Count >= config.strategy.maxRaydiumAmmV4Positions) return;
+
+    const mintStr = event.baseMint;
+    if (this.seenMints.has(mintStr)) return;
+    if (this.positions.has(mintStr)) return;
+
+    // Только wSOL-пары
+    if (event.quoteMint !== config.wsolMint) return;
+
+    this.seenMints.set(mintStr, Date.now());
+
+    logger.info(`🆕 RAYDIUM AMM V4 NEW POOL: ${mintStr.slice(0, 8)}, pool=${event.pool.slice(0, 8)}`);
+    logEvent('RAYDIUM_AMM_V4_NEW_POOL', { mint: mintStr, pool: event.pool });
+
+    const mint = new PublicKey(mintStr);
+    updateMintState(mint, {
+      isRaydiumAmmV4: true,
+      raydiumPool: new PublicKey(event.pool),
+    });
+
+    const cfg = config.strategy.raydiumAmmV4;
+
+    try {
+      const txId = await buyTokenAmmV4(
+        this.connection, mint, this.payer, cfg.entryAmountSol, cfg.slippageBps,
+      );
+      logger.info(`🟢 Raydium AMM v4 buy sent: ${txId} for ${mintStr.slice(0, 8)}`);
+      logEvent('RAYDIUM_AMM_V4_BUY_SENT', { mint: mintStr, txId });
+
+      const position = new Position(
+        mint, cfg.entryAmountSol, 0,
+        { programId: 'raydium-ammv4', quoteMint: config.wsolMint },
+        6,
+        {
+          entryAmountSol: cfg.entryAmountSol,
+          protocol: 'raydium-ammv4',
+        }
+      );
+      this.positions.set(mintStr, position);
+      this.confirmedPositions.add(mintStr);
+      logger.info(`✅ RAYDIUM AMM V4 POSITION OPENED: ${mintStr.slice(0, 8)}`);
+      logEvent('POSITION_OPENED', { mint: mintStr, protocol: 'raydium-ammv4', entryAmountSol: cfg.entryAmountSol });
+    } catch (err) {
+      logger.error(`Failed to buy Raydium AMM v4 token ${mintStr.slice(0, 8)}: ${err}`);
+    }
+  }
+
   private startMonitoring() {
     if (this.monitoringInterval) clearInterval(this.monitoringInterval);
     this.monitoringInterval = setInterval(() => this.checkPositions(), 400);
@@ -2657,6 +2858,18 @@ export class Sniper {
               const reserves = await this.getPoolReserves(position.mint);
               position.updatePrice(Number(reserves.virtualSolReserves), Number(reserves.virtualTokenReserves));
               position.updateErrors = 0;
+            } catch {
+              position.updateErrors++;
+            }
+          } else if (position.protocol === 'raydium-launch' || position.protocol === 'raydium-cpmm' || position.protocol === 'raydium-ammv4') {
+            try {
+              const reserves = await this.getRaydiumReserves(position);
+              if (reserves) {
+                position.updatePrice(Number(reserves.solReserve), Number(reserves.tokenReserve));
+                position.updateErrors = 0;
+              } else {
+                position.updateErrors++;
+              }
             } catch {
               position.updateErrors++;
             }
@@ -3380,6 +3593,63 @@ export class Sniper {
       };
       this.reservesCache.set(key, { reserves: result, timestamp: Date.now() });
       return result;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getRaydiumReserves(position: Position): Promise<{ solReserve: bigint; tokenReserve: bigint } | null> {
+    const mintStr = position.mint.toBase58();
+    const key = mintStr + '_raydium';
+    const cached = this.reservesCache.get(key);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) return cached.reserves;
+
+    try {
+      const state = getMintState(position.mint);
+      const poolPk = state.raydiumPool;
+      if (!poolPk) return null;
+
+      if (position.protocol === 'raydium-launch') {
+        // LaunchLab: read virtual reserves directly from pool account
+        const acc = await withRetry(() => withRpcLimit(() => this.connection.getAccountInfo(poolPk)));
+        if (!acc) return null;
+        const pool = parseLaunchLabPool(acc.data);
+        const result = { solReserve: pool.virtualB, tokenReserve: pool.virtualA };
+        this.reservesCache.set(key, { reserves: result, timestamp: Date.now() });
+        return result;
+      }
+
+      if (position.protocol === 'raydium-cpmm') {
+        const acc = await withRetry(() => withRpcLimit(() => this.connection.getAccountInfo(poolPk)));
+        if (!acc) return null;
+        const pool = parseCpmmPool(acc.data);
+        // Read vault token balances
+        const [balA, balB] = await Promise.all([
+          withRetry(() => withRpcLimit(() => this.connection.getTokenAccountBalance(pool.vaultA))),
+          withRetry(() => withRpcLimit(() => this.connection.getTokenAccountBalance(pool.vaultB))),
+        ]);
+        const isBaseToken = pool.mintA.toBase58() !== config.wsolMint;
+        const result = isBaseToken
+          ? { tokenReserve: BigInt(balA.value.amount), solReserve: BigInt(balB.value.amount) }
+          : { solReserve: BigInt(balA.value.amount), tokenReserve: BigInt(balB.value.amount) };
+        this.reservesCache.set(key, { reserves: result, timestamp: Date.now() });
+        return result;
+      }
+
+      if (position.protocol === 'raydium-ammv4') {
+        const acc = await withRetry(() => withRpcLimit(() => this.connection.getAccountInfo(poolPk)));
+        if (!acc) return null;
+        const pool = parseAmmV4Pool(acc.data);
+        const [baseBal, quoteBal] = await Promise.all([
+          withRetry(() => withRpcLimit(() => this.connection.getTokenAccountBalance(pool.baseVault))),
+          withRetry(() => withRpcLimit(() => this.connection.getTokenAccountBalance(pool.quoteVault))),
+        ]);
+        const result = { tokenReserve: BigInt(baseBal.value.amount), solReserve: BigInt(quoteBal.value.amount) };
+        this.reservesCache.set(key, { reserves: result, timestamp: Date.now() });
+        return result;
+      }
+
+      return null;
     } catch {
       return null;
     }
