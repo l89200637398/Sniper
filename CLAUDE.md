@@ -34,7 +34,10 @@ src/
 ├── trading/
 │   ├── buy.ts               # Pump.fun buy instruction builder
 │   ├── sell.ts              # Pump.fun sell transaction
-│   └── pumpSwap.ts          # PumpSwap AMM buy/sell (pool parsing, slippage)
+│   ├── pumpSwap.ts          # PumpSwap AMM buy/sell (pool parsing, slippage)
+│   ├── raydiumLaunchLab.ts  # Raydium LaunchLab bonding curve buy/sell
+│   ├── raydiumCpmm.ts       # Raydium CPMM AMM buy/sell
+│   └── raydiumAmmV4.ts      # Raydium AMM v4 legacy swap
 ├── geyser/
 │   └── client.ts            # Yellowstone Geyser gRPC streaming client (EventEmitter)
 ├── jito/
@@ -104,6 +107,9 @@ Geyser gRPC stream → EventEmitter events
 - **Pump.fun**: Bonding curve buys with cashback upgrade support (Feb 2026)
 - **PumpSwap**: AMM pool buys/sells with poolV2 PDA + cashback support
 - **Mayhem Mode**: Alternative protocol with special fee recipients
+- **Raydium LaunchLab**: Bonding curve protocol (graduation at 85 SOL → migration to AMM v4 or CPMM)
+- **Raydium CPMM (CP-Swap)**: Constant product AMM, 4 fee tiers (25/100/200/400 bps), Token-2022 support
+- **Raydium AMM v4**: Legacy constant product AMM, fixed 25 bps fee, instruction index-based (not Anchor)
 
 ### Protocol Details
 
@@ -165,6 +171,38 @@ Geyser gRPC stream → EventEmitter events
 - **OptionBool**: Borsh struct with single bool field = 1 byte (0=false, 1=true)
 - **Fees**: Dynamic from feeConfig (not hardcoded). Actual ~125 bps for most pools.
 - **Alternative instruction**: `buy_exact_quote_in` (disc `c62e1552b4d9e870`) — specifies SOL input instead of token output
+
+#### Raydium LaunchLab (Bonding Curve)
+
+- **Program**: `LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj`
+- **Buy instruction**: `BuyExactIn` disc `[250,234,13,123,213,156,19,236]`
+  - Args: `amountB` (u64, SOL), `minAmountA` (u64, min tokens), `shareFeeRate` (u64, 0)
+  - 18 accounts
+- **Sell instruction**: `SellExactIn` disc `[149,39,222,155,211,124,152,26]`
+  - Args: `amountA` (u64, tokens), `minAmountB` (u64, min SOL), `shareFeeRate` (u64, 0)
+  - 18 accounts
+- **Pool layout**: virtualA/virtualB (token/SOL reserves), realA/realB, status (0=active, 1=migrated)
+- **Graduation**: At ~85 SOL → migrates to AMM v4 or CPMM based on `migrateType` (0=AMM v4, 1=CPMM)
+
+#### Raydium CPMM (CP-Swap)
+
+- **Program**: `CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C`
+- **Swap instruction**: `SwapBaseIn` disc `[143,190,90,218,196,30,51,222]`
+  - Args: `amountIn` (u64), `minAmountOut` (u64)
+  - 13 accounts
+- **Pool layout**: configId, vaultA/vaultB, mintA/mintB, decimals, observationId
+- **Fee tiers**: 25, 100, 200, 400 bps (from configId)
+- **Token-2022 support**: Yes
+
+#### Raydium AMM v4 (Legacy)
+
+- **Program**: `675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8`
+- **Swap instruction**: data[0] = 9 (SwapBaseIn)
+  - Args (after index byte): `amountIn` (u64), `minAmountOut` (u64)
+  - 8 accounts, hardcoded authority `5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1`
+- **Create pool detection**: data[0] = 1
+- **Pool layout**: baseVault/quoteVault, baseMint/quoteMint, tradeFeeNum/tradeFeeDen, openOrders, marketId
+- **Fee**: On-chain (typically 25 bps, read from tradeFeeNum/tradeFeeDen)
 
 ### Position Lifecycle
 
