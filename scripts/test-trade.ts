@@ -47,6 +47,10 @@ import { BONDING_CURVE_LAYOUT, PUMP_FUN_PROGRAM_ID } from '../src/constants';
 import { getMintState } from '../src/core/state-cache';
 import { detectProtocol } from '../src/core/detector';          // 👈 НОВЫЙ ИМПОРТ
 import { buyTokenPumpSwap } from '../src/trading/pumpSwap';     // 👈 НОВЫЙ ИМПОРТ
+import { buyTokenLaunchLab } from '../src/trading/raydiumLaunchLab';
+import { buyTokenCpmm } from '../src/trading/raydiumCpmm';
+import { buyTokenAmmV4 } from '../src/trading/raydiumAmmV4';
+import { updateMintState } from '../src/core/state-cache';
 
 // ─── Параметры из командной строки ───────────────────────────────────────────
 
@@ -211,6 +215,7 @@ async function main() {
   let usePumpSwap = false;
 
   // Решаем, через какой протокол покупать
+  let useRaydium: 'launchlab' | 'cpmm' | 'ammv4' | null = null;
   if (protocolInfo.protocol === 'pumpswap') {
     usePumpSwap = true;
     info('✅ Токен уже на PumpSwap — будем покупать через AMM');
@@ -221,6 +226,15 @@ async function main() {
     } else {
       info('✅ Токен на pump.fun bonding curve — будем покупать через bonding curve');
     }
+  } else if (protocolInfo.protocol === 'raydium-launch') {
+    useRaydium = 'launchlab';
+    info('✅ Токен на Raydium LaunchLab — будем покупать через bonding curve');
+  } else if (protocolInfo.protocol === 'raydium-cpmm') {
+    useRaydium = 'cpmm';
+    info('✅ Токен на Raydium CPMM — будем покупать через AMM');
+  } else if (protocolInfo.protocol === 'raydium-ammv4') {
+    useRaydium = 'ammv4';
+    info('✅ Токен на Raydium AMM v4 — будем покупать через legacy AMM');
   } else {
     err('Не удалось определить протокол токена');
     process.exit(1);
@@ -276,12 +290,43 @@ async function main() {
   }
 
   // ── ПОКУПКА (ветвление) ────────────────────────────────────────────────────
-  step(`7. ПОКУПКА через ${usePumpSwap ? 'PumpSwap AMM' : 'pump.fun bonding curve'}`);
+  const buyProtocolLabel = useRaydium ? `Raydium ${useRaydium}` : usePumpSwap ? 'PumpSwap AMM' : 'pump.fun bonding curve';
+  step(`7. ПОКУПКА через ${buyProtocolLabel}`);
 
   let buyTxId: string;
   const priorityFee = getCachedPriorityFee();
 
-  if (usePumpSwap) {
+  if (useRaydium) {
+    // Покупка через Raydium
+    const slippageBps = 3000; // 30% для теста
+    info(`Входная сумма:  ${ENTRY_SOL} SOL`);
+    info(`Slippage:       ${slippageBps / 100}%`);
+    info(`Raydium protocol: ${useRaydium}`);
+
+    // Устанавливаем state для sell-engine
+    if (useRaydium === 'launchlab') {
+      updateMintState(mintPubkey, { isRaydiumLaunch: true, raydiumPool: protocolInfo.pool });
+    } else if (useRaydium === 'cpmm') {
+      updateMintState(mintPubkey, { isRaydiumCpmm: true, raydiumPool: protocolInfo.pool });
+    } else {
+      updateMintState(mintPubkey, { isRaydiumAmmV4: true, raydiumPool: protocolInfo.pool });
+    }
+
+    try {
+      if (useRaydium === 'launchlab') {
+        buyTxId = await buyTokenLaunchLab(connection, mintPubkey, payer, ENTRY_SOL, slippageBps, protocolInfo.pool);
+      } else if (useRaydium === 'cpmm') {
+        buyTxId = await buyTokenCpmm(connection, mintPubkey, payer, ENTRY_SOL, slippageBps, protocolInfo.pool);
+      } else {
+        buyTxId = await buyTokenAmmV4(connection, mintPubkey, payer, ENTRY_SOL, slippageBps, protocolInfo.pool);
+      }
+      ok(`RAYDIUM ${useRaydium.toUpperCase()} BUY sent: ${buyTxId}`);
+      info(`Solscan: https://solscan.io/tx/${buyTxId}`);
+    } catch (e) {
+      err(`Raydium ${useRaydium} buy failed: ${e}`);
+      process.exit(1);
+    }
+  } else if (usePumpSwap) {
     // Покупка через PumpSwap
     const pumpSwapCfg = {
       entryAmountSol: ENTRY_SOL,
