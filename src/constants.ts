@@ -126,3 +126,270 @@ export const GLOBAL_ACCOUNT_LAYOUT = {
   FEE_RECIPIENTS_COUNT:        7,    // количество в массиве (не считая первый)
   FEE_TOTAL_COUNT:             8,    // всего валидных адресов
 } as const;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ═══ RAYDIUM ═══════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Raydium Program IDs (mainnet) ───────────────────────────────────────────
+//
+// Источник: https://docs.raydium.io/raydium/protocol/developers/addresses
+//           https://github.com/raydium-io/raydium-sdk-V2/src/common/programId.ts
+
+// LaunchLab — bonding curve launchpad (аналог pump.fun)
+export const RAYDIUM_LAUNCHLAB_PROGRAM_ID = 'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj';
+export const RAYDIUM_LAUNCHLAB_AUTH        = 'WLHv2UAZm6z4KyaaELi5pjdbJh6RESMva1Rnn8pJVVh';
+export const RAYDIUM_LAUNCHLAB_PLATFORM    = '4Bu96XjU84XjPDSpveTVf6LYGCkfW5FK7SNkREWcEfV4';
+export const RAYDIUM_LAUNCHLAB_CONFIG      = '6s1xP3hpbAfFoNtUNF8mfHsjr2Bd97JxFJRWLbL6aHuX';
+
+// CPMM (CP-Swap) — новый constant product AMM (аналог PumpSwap, Token-2022 support)
+export const RAYDIUM_CPMM_PROGRAM_ID  = 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C';
+export const RAYDIUM_CPMM_AUTH        = 'GpMZbSM2GgvTKHJirzeGfMFoaZ8UR2X7F4v8vHTvxFbL';
+export const RAYDIUM_CPMM_FEE_ACC    = 'DNXgeM9EiiaAbaWvwjHj9fQQLAX5ZsfHyvmYUNRAdNC8';
+
+// AMM v4 — legacy constant product (основной DEX Solana, огромный объём)
+export const RAYDIUM_AMM_V4_PROGRAM_ID = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
+export const RAYDIUM_AMM_V4_AUTHORITY  = '5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1'; // PDA nonce=252
+
+// Fee destination (для детекции создания AMM v4 пулов через gRPC)
+export const RAYDIUM_FEE_DESTINATION = '7YttLkHDoNj9wyDur5pM1ejNaAvT9X4eqaYcHQqtj2G5';
+
+// Router
+export const RAYDIUM_ROUTER_PROGRAM_ID = 'routeUGWgWzqBWFcrCfv8tritsqukccJPu3q5GPP3xS';
+
+// ─── Raydium LaunchLab discriminators ────────────────────────────────────────
+//
+// Anchor discriminator = первые 8 байт sha256('global:<instructionName>')
+// Источник: raydium-sdk-V2/src/raydium/launchpad/instrument.ts
+//
+export const RAYDIUM_DISCRIMINATOR = {
+  // ── LaunchLab (LanMV9sA...) ──────────────────────────────────────────────
+  LAUNCH_INITIALIZE_V2:  Buffer.from([67, 153, 175, 39, 218, 16, 38, 32]),
+  LAUNCH_BUY_EXACT_IN:   Buffer.from([250, 234, 13, 123, 213, 156, 19, 236]),
+  LAUNCH_BUY_EXACT_OUT:  Buffer.from([24, 211, 116, 40, 105, 3, 153, 56]),
+  LAUNCH_SELL_EXACT_IN:  Buffer.from([149, 39, 222, 155, 211, 124, 152, 26]),
+  LAUNCH_SELL_EXACT_OUT: Buffer.from([95, 200, 71, 34, 8, 9, 11, 166]),
+
+  // ── CPMM (CPMMoo8L...) ──────────────────────────────────────────────────
+  // Источник: raydium-sdk-V2/src/raydium/cpmm/instruction.ts
+  CPMM_CREATE_POOL:    Buffer.from([175, 175, 109, 31, 13, 152, 155, 237]),
+  CPMM_SWAP_BASE_IN:   Buffer.from([143, 190, 90, 218, 196, 30, 51, 222]),
+  CPMM_SWAP_BASE_OUT:  Buffer.from([55, 217, 98, 86, 163, 74, 180, 173]),
+
+  // ── AMM v4 (675kPX9M...) ────────────────────────────────────────────────
+  // AMM v4 НЕ использует Anchor discriminators — вместо этого instruction index (u8).
+  // SwapBaseIn  = index 9 (legacy), SwapBaseInV2  = index 16 (актуальный, без OpenBook)
+  // SwapBaseOut = index 10 (legacy), SwapBaseOutV2 = index 17 (актуальный)
+  // CreatePool  = index 1
+  // Для детекции новых пулов: instruction data[0] == 1
+  AMM_V4_CREATE_POOL_INDEX:    1,
+  AMM_V4_SWAP_BASE_IN_INDEX:   9,
+  AMM_V4_SWAP_BASE_IN_V2_INDEX:  16,  // без OpenBook accounts — используем этот
+  AMM_V4_SWAP_BASE_OUT_INDEX:  10,
+  AMM_V4_SWAP_BASE_OUT_V2_INDEX: 17,  // без OpenBook accounts — используем этот
+};
+
+// ─── Raydium LaunchLab Pool layout ───────────────────────────────────────────
+//
+// Источник: raydium-sdk-V2/src/raydium/launchpad/layout.ts (LaunchpadPool)
+//
+// Поля LaunchpadPool (после 8-байтного Anchor discriminator):
+//   epoch                : u64     @ 8
+//   status               : u8      @ 16    (0=active, 1=migrate)
+//   mintDecimalA         : u8      @ 17
+//   mintDecimalB         : u8      @ 18
+//   supply               : u64     @ 19
+//   totalSellA           : u64     @ 27    (всего токенов A продано на curve)
+//   virtualA             : u64     @ 35    (виртуальные резервы token A)
+//   virtualB             : u64     @ 43    (виртуальные резервы token B / SOL)
+//   realA                : u64     @ 51    (реальные резервы token A)
+//   realB                : u64     @ 59    (реальные резервы token B / SOL)
+//   protocolFee          : u64     @ 67
+//   platformFee          : u64     @ 75
+//   migrateFee           : u64     @ 83
+//   --- vesting struct ---
+//   totalLockedAmount    : u64     @ 91
+//   cliffPeriod          : u64     @ 99
+//   unlockPeriod         : u64     @ 107
+//   --- public keys ---
+//   configId             : Pubkey  @ 115   (32 bytes)
+//   platformId           : Pubkey  @ 147   (32 bytes)
+//   mintA                : Pubkey  @ 179   (32 bytes) — токен проекта
+//   mintB                : Pubkey  @ 211   (32 bytes) — wSOL
+//   vaultA               : Pubkey  @ 243   (32 bytes)
+//   vaultB               : Pubkey  @ 275   (32 bytes)
+//   mintAuthorityA       : Pubkey  @ 307   (32 bytes)
+//   creator              : Pubkey  @ 339   (32 bytes)
+//   migrateType          : u8      @ 371   (0=AMM v4, 1=CPMM)
+//   ...reserved          : 54 bytes
+//
+// ВАЖНО: status=0 → торговля на bonding curve, status=1 → пул мигрирован
+//
+export const RAYDIUM_LAUNCH_POOL_LAYOUT = {
+  EPOCH_OFFSET:          8,
+  STATUS_OFFSET:         16,   // u8: 0=active, 1=migrate
+  MINT_DECIMAL_A_OFFSET: 17,
+  MINT_DECIMAL_B_OFFSET: 18,
+  SUPPLY_OFFSET:         19,
+  TOTAL_SELL_A_OFFSET:   27,
+  VIRTUAL_A_OFFSET:      35,   // virtual reserves token A
+  VIRTUAL_B_OFFSET:      43,   // virtual reserves SOL (quote)
+  REAL_A_OFFSET:         51,   // real reserves token A
+  REAL_B_OFFSET:         59,   // real reserves SOL (quote)
+  PROTOCOL_FEE_OFFSET:   67,
+  PLATFORM_FEE_OFFSET:   75,
+  MIGRATE_FEE_OFFSET:    83,
+  CONFIG_ID_OFFSET:      115,  // Pubkey, 32 bytes
+  PLATFORM_ID_OFFSET:    147,  // Pubkey, 32 bytes
+  MINT_A_OFFSET:         179,  // Pubkey, 32 bytes — project token
+  MINT_B_OFFSET:         211,  // Pubkey, 32 bytes — wSOL
+  VAULT_A_OFFSET:        243,  // Pubkey, 32 bytes
+  VAULT_B_OFFSET:        275,  // Pubkey, 32 bytes
+  CREATOR_OFFSET:        339,  // Pubkey, 32 bytes
+  MIGRATE_TYPE_OFFSET:   371,  // u8: 0=AMM v4, 1=CPMM
+} as const;
+
+// ─── Raydium CPMM Pool layout ───────────────────────────────────────────────
+//
+// Источник: raydium-sdk-V2/src/raydium/cpmm/layout.ts (CpmmPoolInfoLayout)
+//
+// Поля CpmmPoolInfoLayout (после 8-байтного Anchor discriminator):
+//   configId             : Pubkey  @ 8     (32 bytes)
+//   poolCreator          : Pubkey  @ 40    (32 bytes)
+//   vaultA               : Pubkey  @ 72    (32 bytes)
+//   vaultB               : Pubkey  @ 104   (32 bytes)
+//   mintLp               : Pubkey  @ 136   (32 bytes)
+//   mintA                : Pubkey  @ 168   (32 bytes) — base token
+//   mintB                : Pubkey  @ 200   (32 bytes) — quote token (wSOL)
+//   mintProgramA         : Pubkey  @ 232   (32 bytes)
+//   mintProgramB         : Pubkey  @ 264   (32 bytes)
+//   observationId        : Pubkey  @ 296   (32 bytes)
+//   bump                 : u8      @ 328
+//   status               : u8      @ 329
+//   lpDecimals           : u8      @ 330
+//   mintDecimalA         : u8      @ 331
+//   mintDecimalB         : u8      @ 332
+//   lpAmount             : u64     @ 333
+//   protocolFeesMintA    : u64     @ 341
+//   protocolFeesMintB    : u64     @ 349
+//   fundFeesMintA        : u64     @ 357
+//   fundFeesMintB        : u64     @ 365
+//   openTime             : u64     @ 373
+//
+export const RAYDIUM_CPMM_POOL_LAYOUT = {
+  CONFIG_ID_OFFSET:       8,    // Pubkey, 32 bytes
+  POOL_CREATOR_OFFSET:    40,   // Pubkey, 32 bytes
+  VAULT_A_OFFSET:         72,   // Pubkey, 32 bytes
+  VAULT_B_OFFSET:         104,  // Pubkey, 32 bytes
+  MINT_LP_OFFSET:         136,  // Pubkey, 32 bytes
+  MINT_A_OFFSET:          168,  // Pubkey, 32 bytes — base token
+  MINT_B_OFFSET:          200,  // Pubkey, 32 bytes — quote token (wSOL)
+  MINT_PROGRAM_A_OFFSET:  232,  // Pubkey, 32 bytes
+  MINT_PROGRAM_B_OFFSET:  264,  // Pubkey, 32 bytes
+  OBSERVATION_ID_OFFSET:  296,  // Pubkey, 32 bytes
+  BUMP_OFFSET:            328,  // u8
+  STATUS_OFFSET:          329,  // u8
+  LP_DECIMALS_OFFSET:     330,  // u8
+  MINT_DECIMAL_A_OFFSET:  331,  // u8
+  MINT_DECIMAL_B_OFFSET:  332,  // u8
+  LP_AMOUNT_OFFSET:       333,  // u64
+  OPEN_TIME_OFFSET:       373,  // u64
+} as const;
+
+// ─── Raydium AMM v4 Pool layout ─────────────────────────────────────────────
+//
+// Источник: raydium-sdk-V2/src/raydium/liquidity/layout.ts (liquidityStateV4Layout)
+//
+// Огромный аккаунт (~700+ bytes). Ключевые поля для торговли:
+//   status               : u64    @ 0
+//   nonce                : u64    @ 8     (для PDA authority)
+//   baseDecimal          : u64    @ 32
+//   quoteDecimal         : u64    @ 40
+//   tradeFeeNumerator    : u64    @ 144
+//   tradeFeeDenominator  : u64    @ 152
+//   swapBaseInAmount     : u128   @ 248   (16 bytes)
+//   swapQuoteOutAmount   : u128   @ 264   (16 bytes)
+//   swapQuoteInAmount    : u128   @ 288   (16 bytes)
+//   swapBaseOutAmount    : u128   @ 304   (16 bytes)
+//   baseVault            : Pubkey @ 336   (32 bytes)
+//   quoteVault           : Pubkey @ 368   (32 bytes)
+//   baseMint             : Pubkey @ 400   (32 bytes)
+//   quoteMint            : Pubkey @ 432   (32 bytes)
+//   lpMint               : Pubkey @ 464   (32 bytes)
+//   openOrders           : Pubkey @ 496   (32 bytes)
+//   marketId             : Pubkey @ 528   (32 bytes)
+//   marketProgramId      : Pubkey @ 560   (32 bytes)
+//   targetOrders         : Pubkey @ 592   (32 bytes)
+//
+// Fee: 25 bps (numerator=25, denominator=10000)
+// Formula: amountOut = amountIn * (1 - fee) * reserveOut / (reserveIn + amountIn * (1 - fee))
+//
+export const RAYDIUM_AMM_V4_POOL_LAYOUT = {
+  STATUS_OFFSET:           0,
+  NONCE_OFFSET:            8,
+  BASE_DECIMAL_OFFSET:     32,
+  QUOTE_DECIMAL_OFFSET:    40,
+  TRADE_FEE_NUM_OFFSET:    144,
+  TRADE_FEE_DEN_OFFSET:    152,
+  BASE_VAULT_OFFSET:       336,  // Pubkey, 32 bytes
+  QUOTE_VAULT_OFFSET:      368,  // Pubkey, 32 bytes
+  BASE_MINT_OFFSET:        400,  // Pubkey, 32 bytes
+  QUOTE_MINT_OFFSET:       432,  // Pubkey, 32 bytes
+  LP_MINT_OFFSET:          464,  // Pubkey, 32 bytes
+  OPEN_ORDERS_OFFSET:      496,  // Pubkey, 32 bytes
+  MARKET_ID_OFFSET:        528,  // Pubkey, 32 bytes
+  MARKET_PROGRAM_ID_OFFSET: 560, // Pubkey, 32 bytes
+  TARGET_ORDERS_OFFSET:    592,  // Pubkey, 32 bytes
+} as const;
+
+// ─── Raydium AMM v4 new pool detection (gRPC) ───────────────────────────────
+//
+// Для детекции создания новых AMM v4 пулов через gRPC:
+//   1. Подписка на транзакции с account_include = [RAYDIUM_FEE_DESTINATION]
+//   2. Фильтр: instruction data[0] == 1 (create pool)
+//   3. Извлечение аккаунтов по индексам:
+//
+export const RAYDIUM_AMM_V4_CREATE_POOL_ACCOUNT_INDICES = {
+  POOL_ID:        4,
+  AUTHORITY:      5,
+  OPEN_ORDERS:    6,
+  LP_MINT:        7,
+  BASE_MINT:      8,
+  QUOTE_MINT:     9,
+  BASE_VAULT:     10,
+  QUOTE_VAULT:    11,
+  TARGET_ORDERS:  12,
+  MARKET:         16,
+} as const;
+
+// ─── Raydium LaunchLab PDA seeds ─────────────────────────────────────────────
+//
+// Источник: raydium-sdk-V2/src/raydium/launchpad/pda.ts
+//
+export const RAYDIUM_PDA_SEEDS = {
+  AUTH:                   'vault_auth_seed',
+  GLOBAL_CONFIG:          'global_config',
+  POOL:                   'pool',           // seeds: [POOL, mintA, mintB]
+  POOL_VAULT:             'pool_vault',     // seeds: [POOL_VAULT, poolId, mint]
+  POOL_VESTING:           'pool_vesting',
+  PLATFORM_CONFIG:        'platform_config',
+  PLATFORM_FEE_VAULT_AUTH: 'platform_fee_vault_auth_seed',
+  CREATOR_FEE_VAULT_AUTH: 'creator_fee_vault_auth_seed',
+  CPI_EVENT:              '__event_authority',
+} as const;
+
+// ─── Raydium fee structure ───────────────────────────────────────────────────
+//
+// AMM v4: фиксированные 25 bps (22 bps LP + 3 bps RAY buyback)
+// CPMM: 4 тира — 25, 100, 200, 400 bps (84% LP, 12% buyback, 4% treasury)
+// LaunchLab: bonding curve fees dynamic from platformConfig + configId
+// LaunchLab graduation: при достижении totalFundRaisingB (default 85 SOL)
+//   → status меняется на 1 (migrate)
+//   → migrateType=0 → AMM v4, migrateType=1 → CPMM
+//
+export const RAYDIUM_FEES = {
+  AMM_V4_FEE_BPS:        25,     // 0.25%
+  CPMM_FEE_TIERS_BPS:    [25, 100, 200, 400] as const,  // 0.25%, 1%, 2%, 4%
+  LAUNCH_GRADUATION_SOL:  85,     // default threshold (min 30 SOL)
+  POOL_CREATION_FEE_SOL:  0.15,   // fee for creating AMM v4 or CPMM pool
+} as const;
