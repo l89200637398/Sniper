@@ -325,6 +325,7 @@ export async function resolveLaunchLabPool(
   connection: Connection,
   mintA:      PublicKey,
   poolHint?:  PublicKey,
+  allowMigrated = false,
 ): Promise<{ poolId: PublicKey; pool: LaunchLabPoolState }> {
   let poolId = poolHint ?? getLaunchPoolPDA(mintA);
   let poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(poolId)));
@@ -346,7 +347,7 @@ export async function resolveLaunchLabPool(
   if (!poolAcc) throw new Error(`LaunchLab pool not found for ${mintA.toBase58()}`);
 
   const pool = parseLaunchLabPool(poolAcc.data);
-  if (pool.status !== 0) {
+  if (pool.status !== 0 && !allowMigrated) {
     throw new Error(`LaunchLab pool migrated (status=${pool.status}), use CPMM/AMM v4 instead`);
   }
 

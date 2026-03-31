@@ -60,12 +60,12 @@ async function testLaunchLab(connection: Connection, mint: PublicKey, payer: Key
   sep('RAYDIUM LAUNCHLAB (Bonding Curve)');
   const PROGRAM = new PublicKey(RAYDIUM_LAUNCHLAB_PROGRAM_ID);
 
-  // 1. Pool discovery
+  // 1. Pool discovery (allowMigrated=true — проверяем layout даже для мигрированных)
   info('1. Pool discovery...');
   let poolId: PublicKey;
   let pool: ReturnType<typeof parseLaunchLabPool> extends infer T ? T : never;
   try {
-    const result = await resolveLaunchLabPool(connection, mint);
+    const result = await resolveLaunchLabPool(connection, mint, undefined, true);
     poolId = result.poolId;
     pool = result.pool;
     ok(`Pool found: ${poolId.toBase58()}`);
@@ -76,7 +76,7 @@ async function testLaunchLab(connection: Connection, mint: PublicKey, payer: Key
 
   // 2. Pool state
   info('2. Pool state:');
-  info(`   status:       ${pool.status} (0=active, 1=migrated)`);
+  info(`   status:       ${pool.status} (0=active, 250=migrated)`);
   info(`   mintA:        ${pool.mintA.toBase58()} (token)`);
   info(`   mintB:        ${pool.mintB.toBase58()} (wSOL)`);
   info(`   vaultA:       ${pool.vaultA.toBase58()}`);
@@ -90,9 +90,9 @@ async function testLaunchLab(connection: Connection, mint: PublicKey, payer: Key
   info(`   decimalsA:    ${pool.mintDecimalA}`);
   info(`   decimalsB:    ${pool.mintDecimalB}`);
 
-  if (pool.status !== 0) {
-    warn(`Pool is migrated (status=${pool.status}). Cannot buy on LaunchLab.`);
-    return false;
+  const isMigrated = pool.status !== 0;
+  if (isMigrated) {
+    warn(`Pool is migrated (status=${pool.status}). Layout verification only — skipping buy simulation.`);
   }
 
   // 3. AMM math
@@ -104,8 +104,15 @@ async function testLaunchLab(connection: Connection, mint: PublicKey, payer: Key
   info(`   Expected tokens:  ${expectedTokens}`);
   info(`   Min tokens (3%):  ${minTokens}`);
   info(`   Price (SOL/token): ${(Number(solIn) / Number(expectedTokens)).toExponential(4)}`);
+  ok('AMM math OK');
 
-  // 4. Build & simulate
+  // Для мигрированных пулов — layout verified, симуляцию пропускаем
+  if (isMigrated) {
+    ok('Pool discovery + layout parsing + AMM math verified (migrated pool — buy simulation skipped)');
+    return true;
+  }
+
+  // 4. Build & simulate (только для активных пулов)
   info('4. Build buy instruction...');
   const mintInfo = await connection.getAccountInfo(mint);
   if (!mintInfo) { err('Mint account not found'); return false; }
