@@ -1,5 +1,5 @@
 // src/core/sniper.ts
-import { Connection, Keypair, PublicKey, VersionedTransaction, TransactionMessage, TokenBalance, ComputeBudgetProgram } from '@solana/web3.js';
+import { Connection, Keypair, PublicKey, Transaction, VersionedTransaction, TransactionMessage, TokenBalance, ComputeBudgetProgram } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createAssociatedTokenAccountIdempotentInstruction } from '@solana/spl-token';
 import { Mutex } from 'async-mutex';
 import bs58 from 'bs58';
@@ -454,6 +454,19 @@ export class Sniper {
       winTrades: this.winTrades,
       positions: positionDetails,
     };
+  }
+
+  getPayerPublicKey(): PublicKey {
+    return this.payer.publicKey;
+  }
+
+  getOpenPositionMints(): string[] {
+    return [...this.positions.keys()];
+  }
+
+  async signTransaction(tx: Transaction): Promise<Transaction> {
+    tx.sign(this.payer);
+    return tx;
   }
 
   private async savePositions(): Promise<void> {
@@ -1083,18 +1096,23 @@ export class Sniper {
       (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
     });
 
-    // ── v3: Rugcheck в фоне (fire-and-forget, не блокирует вход) ──
-    // Результат сохраняется на token — используется в scoring и add-on решениях.
+    // ── v3: Rugcheck — sync gate, блокирует вход при HIGH RISK ──
+    // Timeout 2 сек встроен в checkRugcheck — не замедляет критически.
+    // При ошибке/таймауте → risk:'unknown' (не блокирует вход).
     if (config.strategy.enableRugcheck) {
-      checkRugcheck(token.mint).then(result => {
-        (token as any)._rugcheckResult = result;
-        if (result.risk === 'high') {
-          logger.warn(`🛑 Rugcheck HIGH RISK: ${token.mint.slice(0,8)} — ${result.risks.join(', ')}`);
-          logEvent('RUGCHECK_HIGH_RISK', { mint: token.mint, score: result.score, risks: result.risks });
-          // Если позиция уже открыта (optimistic) — early exit timer сработает.
-          // Если ещё pending — scoring gate в add-on buy заблокирует докупку.
+      try {
+        const rugResult = await checkRugcheck(token.mint);
+        (token as any)._rugcheckResult = rugResult;
+        if (rugResult.risk === 'high') {
+          logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
+          logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
+          return;
         }
-      }).catch(() => { /* timeout/error — не блокируем */ });
+        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms) — entry allowed`);
+      } catch {
+        // Timeout/error — не блокируем вход (risk=unknown)
+        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: check failed, proceeding with entry`);
+      }
     }
 
     // ── v3: Entry gate (sync creator check) ──
@@ -1808,6 +1826,8 @@ export class Sniper {
     const RESEND_FROM_ATTEMPT = 2;
     const confirmInterval = config.timeouts.confirmIntervalMs;
     let tipMultiplier = 1.0;
+    let invalidCount = 0;
+    const MAX_INVALID_BEFORE_REMOVE = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(resolve => setTimeout(resolve, confirmInterval));
@@ -1939,9 +1959,21 @@ export class Sniper {
             this.simulateFailedTx(txId, token.mint).catch(() => {});
             return;
           } else if (bundleStatus === 'Invalid') {
-            logger.warn(`Bundle Invalid for ${token.mint} attempt=${attempt+1} — resending immediately`);
-            logEvent('BUNDLE_INVALID', { mint: token.mint, bundleId, attempt: attempt+1, txId });
-            this.recordBundleResult(false); // счётчик Invalid rate
+            invalidCount++;
+            logger.warn(`Bundle Invalid for ${token.mint} attempt=${attempt+1} invalidCount=${invalidCount}`);
+            logEvent('BUNDLE_INVALID', { mint: token.mint, bundleId, attempt: attempt+1, txId, invalidCount });
+            this.recordBundleResult(false);
+            if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
+              logger.warn(`🗑️ ${invalidCount} Invalid bundles for ${token.mint} — removing optimistic position`);
+              const position = this.positions.get(token.mint);
+              if (position) {
+                this.emitTradeClose(position, token.mint, txId, 'bundle_invalid_repeated', false, 0, Date.now());
+                this.positions.delete(token.mint);
+                await this.savePositions();
+              }
+              logEvent('BUY_FAIL', { mint: token.mint, txId, reason: `bundle_invalid_x${invalidCount}` });
+              return;
+            }
           }
         }
 
@@ -2242,6 +2274,20 @@ export class Sniper {
         return;
       }
 
+      // ── Rugcheck sync gate для PumpSwap ──
+      if (config.strategy.enableRugcheck) {
+        try {
+          const rugResult = await checkRugcheck(token.mint);
+          if (rugResult.risk === 'high') {
+            logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
+            logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_instant' });
+            return;
+          }
+        } catch {
+          logger.debug(`[rugcheck] PumpSwap ${token.mint.slice(0,8)}: check failed, proceeding`);
+        }
+      }
+
       logger.info(`⚡ PumpSwap INSTANT ENTRY: ${token.mint}`);
       logEvent('PUMP_SWAP_INSTANT_ENTRY', { mint: token.mint });
 
@@ -2318,6 +2364,20 @@ export class Sniper {
     if (!safetyResult.safe) {
       logger.warn(`❌ Skip ${buy.mint}: ${safetyResult.reason}`);
       return;
+    }
+
+    // ── Rugcheck sync gate для PumpSwap buy-detected ──
+    if (config.strategy.enableRugcheck) {
+      try {
+        const rugResult = await checkRugcheck(buy.mint);
+        if (rugResult.risk === 'high') {
+          logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING: ${buy.mint.slice(0,8)} score=${rugResult.score}`);
+          logEvent('RUGCHECK_BLOCKED', { mint: buy.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_buy_detected' });
+          return;
+        }
+      } catch {
+        // timeout/error — proceed
+      }
     }
 
     try {
@@ -2407,6 +2467,8 @@ export class Sniper {
     const RESEND_FROM_ATTEMPT = 2;
     const confirmInterval = config.timeouts.confirmIntervalMs;
     let tipMultiplier = 1.0;
+    let invalidCount = 0;
+    const MAX_INVALID_BEFORE_REMOVE = 2;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(resolve => setTimeout(resolve, confirmInterval));
@@ -2506,9 +2568,21 @@ export class Sniper {
             logEvent('PUMP_SWAP_BUY_FAIL', { mint: mint.toBase58(), txId, reason: `bundle_${bundleStatus}` });
             return;
           } else if (bundleStatus === 'Invalid') {
-            logger.warn(`Bundle Invalid for PumpSwap ${mint.toBase58()} attempt=${attempt+1}`);
-            logEvent('BUNDLE_INVALID', { mint: mint.toBase58(), bundleId, attempt: attempt+1, txId });
-            this.recordBundleResult(false); // счётчик Invalid rate
+            invalidCount++;
+            logger.warn(`Bundle Invalid for PumpSwap ${mint.toBase58()} attempt=${attempt+1} invalidCount=${invalidCount}`);
+            logEvent('BUNDLE_INVALID', { mint: mint.toBase58(), bundleId, attempt: attempt+1, txId, invalidCount });
+            this.recordBundleResult(false);
+            if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
+              logger.warn(`🗑️ ${invalidCount} Invalid bundles for PumpSwap ${mint.toBase58()} — removing optimistic position`);
+              const position = this.positions.get(mint.toBase58());
+              if (position) {
+                this.emitTradeClose(position, mint.toBase58(), txId, 'bundle_invalid_repeated', false, 0, Date.now());
+                this.positions.delete(mint.toBase58());
+                await this.savePositions();
+              }
+              logEvent('PUMP_SWAP_BUY_FAIL', { mint: mint.toBase58(), txId, reason: `bundle_invalid_x${invalidCount}` });
+              return;
+            }
           }
         }
 
