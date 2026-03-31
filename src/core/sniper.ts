@@ -101,6 +101,9 @@ export class Sniper {
   private sellingMints: Set<string> = new Set();
   private partialSellingMints: Set<string> = new Set();
   private startBalance: number = 0;
+  private cachedBalance: number = 0;
+  private cachedBalanceTs: number = 0;
+  private static readonly BALANCE_CACHE_TTL = 5_000; // 5 сек
   private startedAt: number = 0;
   private totalTrades: number = 0;
   private winTrades: number = 0;
@@ -462,6 +465,16 @@ export class Sniper {
 
   getOpenPositionMints(): string[] {
     return [...this.positions.keys()];
+  }
+
+  async getCachedBalance(): Promise<number> {
+    const now = Date.now();
+    if (now - this.cachedBalanceTs < Sniper.BALANCE_CACHE_TTL && this.cachedBalance > 0) {
+      return this.cachedBalance;
+    }
+    this.cachedBalance = await withRpcLimit(() => this.connection.getBalance(this.payer.publicKey)).catch(() => this.cachedBalance);
+    this.cachedBalanceTs = now;
+    return this.cachedBalance;
   }
 
   async signTransaction(tx: Transaction): Promise<Transaction> {
@@ -1082,43 +1095,42 @@ export class Sniper {
       }
     }
 
-    // ── Запускаем проверку социальных сигналов в фоне для всех токенов ──
-    let socialMultiplierForAll = config.strategy.socialLowMultiplier;
-    checkSocialSignals(this.connection, mintPubkey).then(social => {
-      const score = social.score;
-      this.mintSocialScore.set(token.mint, score);
-      (token as any)._socialScore = score;
-      const multiplier = score >= 1 ? config.strategy.socialHighMultiplier : config.strategy.socialLowMultiplier;
-      (token as any)._socialEntryMultiplier = multiplier;
-      logger.debug(`[social] ${token.mint.slice(0,8)} score=${score}, multiplier=${multiplier}`);
-    }).catch(() => {
-      (token as any)._socialScore = 0;
-      (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
-    });
+    // ── Параллельный запуск social + rugcheck (макс ~500мс) ──
+    // Оба — IO-bound, запускаем одновременно чтобы не тратить 500мс+500мс.
+    {
+      const socialPromise = checkSocialSignals(this.connection, mintPubkey)
+        .then(social => {
+          this.mintSocialScore.set(token.mint, social.score);
+          (token as any)._socialScore = social.score;
+          const m = social.score >= 1 ? config.strategy.socialHighMultiplier : config.strategy.socialLowMultiplier;
+          (token as any)._socialEntryMultiplier = m;
+          logger.debug(`[social] ${token.mint.slice(0,8)} score=${social.score}, multiplier=${m}`);
+        })
+        .catch(() => {
+          (token as any)._socialScore = 0;
+          (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
+        });
 
-    // ── v3: Rugcheck — sync gate, блокирует вход при HIGH RISK ──
-    // Timeout 2 сек встроен в checkRugcheck — не замедляет критически.
-    // При ошибке/таймауте → risk:'unknown' (не блокирует вход).
-    if (config.strategy.enableRugcheck) {
-      try {
-        const rugResult = await checkRugcheck(token.mint);
+      const rugPromise = config.strategy.enableRugcheck
+        ? checkRugcheck(token.mint).catch(() => null)
+        : Promise.resolve(null);
+
+      const [, rugResult] = await Promise.all([socialPromise, rugPromise]);
+
+      if (rugResult) {
         (token as any)._rugcheckResult = rugResult;
         if (rugResult.risk === 'high') {
           logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
           logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
           return;
         }
-        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms) — entry allowed`);
-      } catch {
-        // Timeout/error — не блокируем вход (risk=unknown)
-        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: check failed, proceeding with entry`);
+        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms)`);
       }
     }
 
     // ── v3: Entry gate (sync creator check) ──
-    // ВАЖНО: social и rugcheck — async, на момент входа они ВСЕГДА 0/'unknown'.
-    // Вызывать scoreToken() здесь бесполезно — единственный sync сигнал это creatorRecentTokens.
-    // Полный scoring (с social, rugcheck, buyers) выполняется при add-on buy решениях.
+    // Social и rugcheck уже завершены (параллельный await выше).
+    // creatorRecentTokens — дополнительный sync-фильтр спам-креаторов.
     if (config.strategy.enableScoring) {
       const creatorTokens = this.countCreatorRecentTokens(token.creator);
       const isMayhem = getMintState(mintPubkey).isMayhemMode ?? false;
@@ -1546,7 +1558,7 @@ export class Sniper {
         config.strategy.minEntryAmountSol
       );
       const minRequiredBalance = estimatedEntry + config.jito.tipAmountSol * 2 + 0.002; // entry + 2 tips + gas buffer
-      const walletBalanceLamports = await withRpcLimit(() => this.connection.getBalance(this.payer.publicKey)).catch(() => 0);
+      const walletBalanceLamports = await this.getCachedBalance();
       const walletBalanceSol = walletBalanceLamports / 1e9;
       if (walletBalanceSol < minRequiredBalance) {
         logger.warn(`🚫 Insufficient balance for buy: ${walletBalanceSol.toFixed(4)} SOL < ${minRequiredBalance.toFixed(4)} required (entry=${estimatedEntry.toFixed(4)})`);
@@ -2258,34 +2270,32 @@ export class Sniper {
         return;
       }
 
-      // ── Проверка баланса перед PumpSwap buy ───────────────────────────────
-      const psCfg = getStrategyForProtocol('pumpswap');
-      const psMinRequired = psCfg.entryAmountSol + config.jito.tipAmountSol * 2 + 0.002;
-      const psBalance = await withRpcLimit(() => this.connection.getBalance(this.payer.publicKey)).catch(() => 0);
-      if (psBalance / 1e9 < psMinRequired) {
-        logger.warn(`🚫 PumpSwap instant: insufficient balance ${(psBalance/1e9).toFixed(4)} SOL < ${psMinRequired.toFixed(4)} required`);
-        logEvent('BUY_SKIPPED_BALANCE', { mint: token.mint, balance: psBalance/1e9, required: psMinRequired, path: 'pumpswap_instant' });
-        return;
-      }
-
       const state = getMintState(mintPubkey);
       if (!state.poolBaseTokenAccount || !state.poolQuoteTokenAccount) {
         logger.debug(`PumpSwap instant entry: pool accounts not yet cached for ${token.mint}`);
         return;
       }
 
-      // ── Rugcheck sync gate для PumpSwap ──
-      if (config.strategy.enableRugcheck) {
-        try {
-          const rugResult = await checkRugcheck(token.mint);
-          if (rugResult.risk === 'high') {
-            logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
-            logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_instant' });
-            return;
-          }
-        } catch {
-          logger.debug(`[rugcheck] PumpSwap ${token.mint.slice(0,8)}: check failed, proceeding`);
-        }
+      // ── Параллельная проверка баланса + rugcheck ──
+      const psCfg = getStrategyForProtocol('pumpswap');
+      const psMinRequired = psCfg.entryAmountSol + config.jito.tipAmountSol * 2 + 0.002;
+
+      const [psBalance, rugResult] = await Promise.all([
+        this.getCachedBalance(),
+        config.strategy.enableRugcheck
+          ? checkRugcheck(token.mint).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      if (psBalance / 1e9 < psMinRequired) {
+        logger.warn(`🚫 PumpSwap instant: insufficient balance ${(psBalance/1e9).toFixed(4)} SOL < ${psMinRequired.toFixed(4)} required`);
+        logEvent('BUY_SKIPPED_BALANCE', { mint: token.mint, balance: psBalance/1e9, required: psMinRequired, path: 'pumpswap_instant' });
+        return;
+      }
+      if (rugResult && rugResult.risk === 'high') {
+        logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score}`);
+        logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_instant' });
+        return;
       }
 
       logger.info(`⚡ PumpSwap INSTANT ENTRY: ${token.mint}`);
@@ -2345,39 +2355,33 @@ export class Sniper {
       return;
     }
 
-    let safetyResult: { safe: boolean; reason?: string };
-    try {
-      safetyResult = await Promise.race([
+    // ── Параллельная проверка safety + rugcheck ──
+    const [safetyResult, rugResult] = await Promise.all([
+      Promise.race([
         isTokenSafeCached(this.connection, mintPubkey),
         new Promise<{ safe: false; reason: string }>((_, reject) =>
           setTimeout(() => reject(new Error('timeout')), 2500)
         ),
-      ]);
-    } catch {
-      try {
-        safetyResult = await isTokenSafeCached(this.connection, mintPubkey);
-      } catch {
-        safetyResult = { safe: false, reason: 'timeout after retry' };
-      }
-    }
+      ]).catch(async () => {
+        try {
+          return await isTokenSafeCached(this.connection, mintPubkey);
+        } catch {
+          return { safe: false as const, reason: 'timeout after retry' };
+        }
+      }),
+      config.strategy.enableRugcheck
+        ? checkRugcheck(buy.mint).catch(() => null)
+        : Promise.resolve(null),
+    ]);
 
     if (!safetyResult.safe) {
       logger.warn(`❌ Skip ${buy.mint}: ${safetyResult.reason}`);
       return;
     }
-
-    // ── Rugcheck sync gate для PumpSwap buy-detected ──
-    if (config.strategy.enableRugcheck) {
-      try {
-        const rugResult = await checkRugcheck(buy.mint);
-        if (rugResult.risk === 'high') {
-          logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING: ${buy.mint.slice(0,8)} score=${rugResult.score}`);
-          logEvent('RUGCHECK_BLOCKED', { mint: buy.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_buy_detected' });
-          return;
-        }
-      } catch {
-        // timeout/error — proceed
-      }
+    if (rugResult && rugResult.risk === 'high') {
+      logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING: ${buy.mint.slice(0,8)} score=${rugResult.score}`);
+      logEvent('RUGCHECK_BLOCKED', { mint: buy.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_buy_detected' });
+      return;
     }
 
     try {
