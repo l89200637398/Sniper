@@ -172,6 +172,7 @@ export class GeyserClient extends EventEmitter {
                 this.PUMP_ROUTER, // ← добавили роутер
                 this.RAYDIUM_LAUNCH,  // ← Raydium LaunchLab
                 this.RAYDIUM_CPMM,    // ← Raydium CPMM
+                this.RAYDIUM_AMM_V4,  // ← Raydium AMM v4
             ],
         };
         if (accountAddresses.length > 0) {
@@ -189,7 +190,7 @@ export class GeyserClient extends EventEmitter {
                     failed: false,
                     account_include: [
                         this.PUMP_PROGRAM, this.PUMP_SWAP, this.PUMP_ROUTER,
-                        this.RAYDIUM_LAUNCH, this.RAYDIUM_CPMM, this.RAYDIUM_FEE_DEST,
+                        this.RAYDIUM_LAUNCH, this.RAYDIUM_CPMM, this.RAYDIUM_AMM_V4, this.RAYDIUM_FEE_DEST,
                     ],
                 },
             },
