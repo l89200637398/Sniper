@@ -3,7 +3,7 @@ node_modules/
 npm-debug.log
 yarn-error.log
 yarn-debug.log
-*.log
+# *.log
 
 # Build output
 dist/
@@ -24,7 +24,7 @@ build/
 Thumbs.db
 
 # Logs
-logs/
+# logs/
 pool.log
 pools.log
 
