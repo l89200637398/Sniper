@@ -199,23 +199,35 @@ export async function resolveCpmmPool(
     poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(poolId!)));
   }
 
-  // 2. getProgramAccounts fallback — ищем mint как mintA или mintB
+  // 2. getProgramAccounts fallback — ищем mint как mintA или mintB, предпочитаем wSOL-paired
   if (!poolAcc) {
     const L = RAYDIUM_CPMM_POOL_LAYOUT;
+    const allCandidates: { pubkey: PublicKey; account: import('@solana/web3.js').AccountInfo<Buffer> }[] = [];
     for (const offset of [L.MINT_A_OFFSET, L.MINT_B_OFFSET]) {
       try {
         const accounts = await connection.getProgramAccounts(CPMM_PROGRAM, {
           commitment: 'confirmed',
           filters: [{ memcmp: { offset, bytes: mint.toBase58() } }],
         });
-        if (accounts.length > 0) {
-          poolId  = accounts[0].pubkey;
-          poolAcc = accounts[0].account;
-          break;
-        }
+        allCandidates.push(...accounts);
       } catch (e) {
         logger.warn(`CPMM getProgramAccounts failed (offset ${offset}): ${e}`);
       }
+    }
+    // Prefer wSOL-paired pool
+    for (const candidate of allCandidates) {
+      const parsed = parseCpmmPool(candidate.account.data);
+      const otherMint = parsed.mintA.equals(mint) ? parsed.mintB : parsed.mintA;
+      if (otherMint.equals(WSOL_MINT)) {
+        poolId  = candidate.pubkey;
+        poolAcc = candidate.account;
+        break;
+      }
+    }
+    // Fallback to any pool if no wSOL-paired found
+    if (!poolAcc && allCandidates.length > 0) {
+      poolId  = allCandidates[0].pubkey;
+      poolAcc = allCandidates[0].account;
     }
   }
 
