@@ -24,8 +24,8 @@ export const config = {
   // tipAmountSol: 0.000012 = ~2× p75 (было 4×). -40% на комиссиях.
   // maxTipAmountSol: 0.00005 — жёсткий потолок (было 0.0015!).
   jito: {
-    bundleUrl: process.env.JITO_BUNDLE_URL ?? '',
-    statusUrl: process.env.JITO_STATUS_URL ?? '',
+    bundleUrl: process.env.JITO_BUNDLE_URL || process.env.JITO_RPC || '',
+    statusUrl: process.env.JITO_STATUS_URL || process.env.JITO_RPC || '',
     tipAmountSol:      0.000012,   // было 0.00002
     maxTipAmountSol:   0.00005,    // было 0.0015 — критично!
     minTipAmountSol:   0.000008,
