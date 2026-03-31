@@ -58,6 +58,11 @@ export const DISCRIMINATOR = {
   PUMP_SWAP_CREATE_POOL: Buffer.from([0xe9, 0x92, 0xd1, 0x8e, 0xcf, 0x68, 0x40, 0xbc]), // global:create_pool
   PUMP_SWAP_BUY:         Buffer.from([0x66, 0x06, 0x3d, 0x12, 0x01, 0xda, 0xeb, 0xea]), // global:buy
   PUMP_SWAP_SELL:        Buffer.from([0x33, 0xe6, 0x85, 0xa4, 0x01, 0x7f, 0x83, 0xad]), // global:sell
+  // Альтернативные PumpSwap дискриминаторы (из логов: Unknown discriminator)
+  // buy_exact_quote_in: пользователь указывает SOL input (quote), получает токены
+  PUMP_SWAP_BUY_EXACT_QUOTE_IN: Buffer.from([0xc6, 0x2e, 0x15, 0x52, 0xb4, 0xd9, 0xe8, 0x70]), // global:buy_exact_quote_in
+  // Альтернативный buy (0a65106b вариант, виден в логах как e445a52e51cb9a1d)
+  PUMP_SWAP_BUY_ALT:           Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]), // global:buy (alternative)
 };
 
 // ─── BondingCurve account layout (151 bytes after февраль 2026 cashback upgrade) ──

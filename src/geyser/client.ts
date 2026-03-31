@@ -39,6 +39,12 @@ export interface RaydiumLaunchSell { mint: string; pool: string; seller: string;
 export interface RaydiumCpmmNewPool { mint: string; pool: string; creator: string; signature: string; }
 export interface RaydiumAmmV4NewPool { pool: string; baseMint: string; quoteMint: string; signature: string; }
 
+// uint64 max = sentinel/overflow → не использовать как торговое значение
+const U64_MAX = 18446744073709551615n;
+function sanitizeAmount(val: bigint): bigint {
+    return val === U64_MAX ? 0n : val;
+}
+
 function pubkeyToBuffer(pubkey: any): Buffer | null {
     try {
         if (!pubkey) return null;
@@ -477,7 +483,7 @@ export class GeyserClient extends EventEmitter {
                     ? Buffer.from(ix.data, 'base64')
                     : Buffer.from(ix.data);
 
-            const amount = data.readBigUInt64LE(8);
+            const amount = sanitizeAmount(data.readBigUInt64LE(8));
             const mintIndex = ix.accounts?.[2];
             if (mintIndex === undefined) return;
             const mint = this.keyToString(message.accountKeys[mintIndex]);
@@ -510,7 +516,7 @@ export class GeyserClient extends EventEmitter {
                     ? Buffer.from(ix.data, 'base64')
                     : Buffer.from(ix.data);
 
-            const amount = data.readBigUInt64LE(8);
+            const amount = sanitizeAmount(data.readBigUInt64LE(8));
             const mintIndex = ix.accounts?.[2];
             const sellerIndex = ix.accounts?.[6];
             if (mintIndex === undefined || sellerIndex === undefined) return;
@@ -536,11 +542,12 @@ export class GeyserClient extends EventEmitter {
         //   PUMP_SWAP_SELL (33e685a4 = global:sell)  = user SELLs wSOL to receive TOKEN → from bot's view: BUY
         if (d.equals(DISCRIMINATOR.PUMP_SWAP_CREATE_POOL)) {
             this.parseCreatePool(ix, message, signature, data, slot);
-        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_BUY)) {
-            // IDL buy = user pays TOKEN, gets wSOL → someone SELLING their token
+        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_BUY) || d.equals(DISCRIMINATOR.PUMP_SWAP_BUY_ALT)) {
+            // IDL buy / buy_alt = user pays TOKEN, gets wSOL → someone SELLING their token
             this.parsePumpSwapSell(ix, message, signature, data, slot);
-        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_SELL)) {
+        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_SELL) || d.equals(DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN)) {
             // IDL sell = user pays wSOL, gets TOKEN → someone BUYING the token
+            // buy_exact_quote_in = user specifies SOL input, gets TOKEN → also a BUY
             this.parsePumpSwapBuy(ix, message, signature, data, slot);
         } else {
             logger.debug(`[pumpswap] Unknown discriminator: ${d.toString('hex')} tx=${signature.slice(0,8)}`);
@@ -606,8 +613,8 @@ export class GeyserClient extends EventEmitter {
         const mint = this.keyToString(message.accountKeys[mintIndex]);
         if (!mint || mint === 'So11111111111111111111111111111111111111112') return;
 
-        const solLamports  = data.length >= 16 ? data.readBigUInt64LE(8)  : 0n; // base_amount_in
-        const tokenAmount  = data.length >= 24 ? data.readBigUInt64LE(16) : 0n; // min_quote_amount_out
+        const solLamports  = sanitizeAmount(data.length >= 16 ? data.readBigUInt64LE(8)  : 0n); // base_amount_in
+        const tokenAmount  = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n); // min_quote_amount_out
 
         logger.info(`🔄 PUMP SWAP BUY: ${mint}, sol=${Number(solLamports)/1e9}SOL, minTokens=${tokenAmount}, slot=${slot}`);
         this.emit('pumpSwapBuyDetected', {
@@ -631,8 +638,8 @@ export class GeyserClient extends EventEmitter {
         const mint = this.keyToString(message.accountKeys[mintIndex]);
         if (!mint || mint === 'So11111111111111111111111111111111111111112') return;
 
-        const solLamports = data.length >= 16 ? data.readBigUInt64LE(8)  : 0n; // base_amount_out (SOL received)
-        const tokenAmount = data.length >= 24 ? data.readBigUInt64LE(16) : 0n; // max_quote_amount_in (tokens sold)
+        const solLamports = sanitizeAmount(data.length >= 16 ? data.readBigUInt64LE(8)  : 0n); // base_amount_out (SOL received)
+        const tokenAmount = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n); // max_quote_amount_in (tokens sold)
 
         logger.debug(`🔄 PUMP SWAP SELL: ${mint}, seller=${this.keyToString(message.accountKeys[0]).slice(0,8)}, tokens=${tokenAmount}, sol=${Number(solLamports)/1e9}SOL, slot=${slot}`);
         this.emit('pumpSwapSellDetected', {

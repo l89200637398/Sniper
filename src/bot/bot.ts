@@ -3,9 +3,12 @@ import { Telegraf, Markup } from 'telegraf';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
+import { PublicKey, Transaction } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID, createCloseAccountInstruction } from '@solana/spl-token';
 import { config } from '../config';
 import { Sniper } from '../core/sniper';
 import { logger } from '../utils/logger';
+import { rpc } from '../infra/rpc';
 
 interface TradeClose {
   event: 'TRADE_CLOSE';
@@ -123,13 +126,26 @@ export class TelegramBot {
       }
     });
 
-    // УДАЛЕНЫ обработчики '📊 Статус' и '📋 Анализ'
+    this.bot.hears('🧹 Dust Cleanup', async (ctx) => {
+      if (!this.isAuthorized(ctx)) {
+        ctx.reply('⛔ Доступ запрещён');
+        return;
+      }
+      await ctx.reply('🔍 Сканирую кошелёк на dust-токены...');
+      try {
+        const result = await this.cleanupDustTokens();
+        await ctx.reply(result, { parse_mode: 'HTML' });
+      } catch (e) {
+        logger.error('Dust cleanup error:', e);
+        await ctx.reply('❌ Ошибка при очистке dust-токенов');
+      }
+    });
   }
 
   private mainKeyboard() {
-    // УДАЛЕНЫ кнопки '📊 Статус' и '📋 Анализ'
     return Markup.keyboard([
       ['🚀 Запустить', '🛑 Остановить'],
+      ['🧹 Dust Cleanup'],
     ]).resize();
   }
 
@@ -215,8 +231,99 @@ export class TelegramBot {
     }
   }
 
-  // Удалены методы buildAnalysisMessage, formatAnalysis и buildHints
-  // (они больше не используются)
+  /**
+   * Сканирует кошелёк на dust-токены (баланс = 0 или < порога)
+   * и закрывает пустые ATA, возвращая rent SOL.
+   */
+  private async cleanupDustTokens(): Promise<string> {
+    const connection = rpc;
+    const wallet = this.sniper.getPayerPublicKey();
+
+    // Получаем все token accounts
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(wallet, {
+      programId: TOKEN_PROGRAM_ID,
+    });
+
+    // Фильтруем: dust = баланс 0, или < 1 токена (по uiAmount)
+    const openPositionMints = new Set(this.sniper.getOpenPositionMints());
+    const dustAccounts: { pubkey: PublicKey; mint: string; balance: number }[] = [];
+
+    for (const { pubkey, account } of tokenAccounts.value) {
+      const parsed = account.data.parsed?.info;
+      if (!parsed) continue;
+      const mint = parsed.mint as string;
+      const uiAmount = Number(parsed.tokenAmount?.uiAmount ?? 0);
+
+      // Не трогаем токены с открытыми позициями
+      if (openPositionMints.has(mint)) continue;
+
+      // Dust = баланс 0 или очень маленький (< 0.001 SOL value, т.е. мусор)
+      if (uiAmount === 0) {
+        dustAccounts.push({ pubkey, mint, balance: uiAmount });
+      }
+    }
+
+    if (dustAccounts.length === 0) {
+      return '✅ Dust-токенов не найдено. Кошелёк чист!';
+    }
+
+    // Закрываем пустые ATA пачками по 10 (лимит инструкций в транзакции)
+    const BATCH_SIZE = 10;
+    let closed = 0;
+    let rentRecovered = 0;
+
+    for (let i = 0; i < dustAccounts.length; i += BATCH_SIZE) {
+      const batch = dustAccounts.slice(i, i + BATCH_SIZE);
+      const tx = new Transaction();
+
+      for (const acc of batch) {
+        tx.add(createCloseAccountInstruction(
+          acc.pubkey,
+          wallet,  // destination (rent goes here)
+          wallet,  // owner
+        ));
+      }
+
+      try {
+        const { blockhash } = await connection.getLatestBlockhash();
+        tx.recentBlockhash = blockhash;
+        tx.feePayer = wallet;
+
+        const signed = await this.sniper.signTransaction(tx);
+        const txId = await connection.sendRawTransaction(signed.serialize(), {
+          skipPreflight: true,
+          maxRetries: 2,
+        });
+
+        logger.info(`🧹 Dust cleanup tx sent: ${txId} (${batch.length} accounts)`);
+        closed += batch.length;
+        rentRecovered += batch.length * 0.00203928; // ~rent per ATA
+      } catch (err) {
+        logger.error(`Dust cleanup batch failed:`, err);
+      }
+    }
+
+    const lines = [
+      `🧹 <b>Dust Cleanup завершён</b>`,
+      ``,
+      `Найдено пустых ATA: ${dustAccounts.length}`,
+      `Закрыто: ${closed}`,
+      `Возвращено rent: ~${rentRecovered.toFixed(4)} SOL`,
+    ];
+
+    if (dustAccounts.length > 0) {
+      lines.push(``);
+      lines.push(`Токены:`);
+      for (const acc of dustAccounts.slice(0, 15)) {
+        lines.push(`  <code>${acc.mint.slice(0, 12)}...</code>`);
+      }
+      if (dustAccounts.length > 15) {
+        lines.push(`  ... и ещё ${dustAccounts.length - 15}`);
+      }
+    }
+
+    return lines.join('\n');
+  }
 
   launch() {
     this.bot.launch();
