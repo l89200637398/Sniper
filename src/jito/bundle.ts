@@ -4,6 +4,7 @@ import axios from 'axios';
 import bs58 from 'bs58';
 import { logger } from '../utils/logger';
 import { logEvent } from '../utils/event-logger';
+import { acquireJitoToken } from '../infra/jito-rate-limiter';
 
 export let lastTipPaid = 0;
 
@@ -278,10 +279,11 @@ export async function sendJitoBurst(
     logger.debug(`Burst: ${txs.length} уникальных signatures ✓`);
   }
 
-  // Отправляем все бандлы параллельно
+  // Отправляем бандлы с rate limiting (каждый ждёт свой Jito RPS-токен)
   await Promise.all(txs.map(async (tx, i) => {
     const multiplier = tipMultipliers[i];
     try {
+      await acquireJitoToken();
       const tipLamports = await resolveTipLamports(multiplier, urgent);
       const tipSol = tipLamports / 1e9;
       const signature = await sendJitoBundle(tx, payer, multiplier, urgent);
