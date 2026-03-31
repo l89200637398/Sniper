@@ -301,7 +301,8 @@ export async function buyTokenAmmV4(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`AMM v4 buy sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('AMM v4 buy simulation OK');
+    logger.info('AMM v4 buy simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);
@@ -364,7 +365,8 @@ export async function sellTokenAmmV4(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`AMM v4 sell sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('AMM v4 sell simulation OK');
+    logger.info('AMM v4 sell simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   if (directRpc) {

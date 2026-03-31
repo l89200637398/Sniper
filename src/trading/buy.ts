@@ -379,7 +379,8 @@ export async function buyToken(
     const simTx = await buildTx();
     const sim = await connection.simulateTransaction(simTx);
     if (sim.value.err) throw new Error(`Buy simulation failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('Buy simulation OK');
+    logger.info('Buy simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   // ── retries=0: buy НЕ должен ретраиться на уровне jito-queue.

@@ -580,7 +580,8 @@ export async function buyTokenPumpSwap(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`PumpSwap buy sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('PumpSwap buy simulation OK');
+    logger.info('PumpSwap buy simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);
@@ -638,7 +639,8 @@ export async function sellTokenPumpSwap(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`PumpSwap sell sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('PumpSwap sell simulation OK');
+    logger.info('PumpSwap sell simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   if (directRpc) {

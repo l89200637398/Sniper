@@ -195,6 +195,29 @@ export class TelegramBot {
     }
     for (let i = 0; i < maxSwap - swapPos.length; i++) lines.push(`  ⏳ Свободен`);
 
+    // Raydium positions (all 3 subtypes combined)
+    const maxRay = (config.strategy.maxRaydiumLaunchPositions ?? 1)
+                 + (config.strategy.maxRaydiumCpmmPositions ?? 1)
+                 + (config.strategy.maxRaydiumAmmV4Positions ?? 1);
+    const rayPos = s.positions.filter((p: any) =>
+      p.protocol === 'raydium-launch' || p.protocol === 'raydium-cpmm' || p.protocol === 'raydium-ammv4'
+    );
+
+    if (maxRay > 0) {
+      lines.push(``);
+      lines.push(`🟣 <b>Raydium</b>  [${rayPos.length}/${maxRay}]`);
+      for (const pos of rayPos) {
+        const pnlStr  = `${pos.pnlPercent >= 0 ? '+' : ''}${pos.pnlPercent.toFixed(1)}%`;
+        const peakStr = pos.peakPnlPercent > 2 ? `  пик +${pos.peakPnlPercent.toFixed(0)}%` : '';
+        const trail   = pos.trailingActivated ? '  🎯' : '';
+        const proto   = pos.protocol.replace('raydium-', '');
+        lines.push(
+          `  ${posEmoji(pos.pnlPercent)} <code>${pos.mint.slice(0, 8)}...</code>  <b>${pnlStr}</b>${peakStr}${trail}  ${proto}  ${fmtUptime(pos.msOpen)}`
+        );
+      }
+      for (let i = 0; i < maxRay - rayPos.length; i++) lines.push(`  ⏳ Свободен`);
+    }
+
     if (s.pendingCount > 0) {
       lines.push(``);
       lines.push(`⌛ Ожидают подтверждения: ${s.pendingCount}`);

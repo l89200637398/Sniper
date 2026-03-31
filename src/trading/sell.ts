@@ -193,7 +193,8 @@ export async function sellToken(
     const simTx = await buildTx();
     const sim = await connection.simulateTransaction(simTx);
     if (sim.value.err) throw new Error(`Sell simulation failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('Sell simulation OK');
+    logger.info('Sell simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   // ── Direct RPC path (fallback): bypass Jito, send через sendRawTransaction ──

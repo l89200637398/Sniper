@@ -415,7 +415,8 @@ export async function buyTokenLaunchLab(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`LaunchLab buy sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('LaunchLab buy simulation OK');
+    logger.info('LaunchLab buy simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);
@@ -478,7 +479,8 @@ export async function sellTokenLaunchLab(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`LaunchLab sell sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('LaunchLab sell simulation OK');
+    logger.info('LaunchLab sell simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   if (directRpc) {

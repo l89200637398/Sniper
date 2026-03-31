@@ -310,7 +310,8 @@ export async function buyTokenCpmm(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`CPMM buy sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('CPMM buy simulation OK');
+    logger.info('CPMM buy simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);
@@ -383,7 +384,8 @@ export async function sellTokenCpmm(
   if (process.env.SIMULATE === 'true') {
     const sim = await connection.simulateTransaction(await buildTx());
     if (sim.value.err) throw new Error(`CPMM sell sim failed: ${JSON.stringify(sim.value.err)}`);
-    logger.debug('CPMM sell simulation OK');
+    logger.info('CPMM sell simulation OK (SIMULATE=true, skipping send)');
+    return 'sim_' + Date.now();
   }
 
   if (directRpc) {
