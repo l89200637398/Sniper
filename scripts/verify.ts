@@ -316,6 +316,202 @@ function printDiscriminators() {
   console.log('Разделение pump.fun vs pumpSwap осуществляется по programId, а не дискриминатору.');
 }
 
+/**
+ * Проверяет консистентность параметров config.
+ * Возвращает количество ошибок.
+ */
+function verifyConfigConsistency(): number {
+  console.log('\n══════════════════════════════════════');
+  console.log(' Config consistency checks');
+  console.log('══════════════════════════════════════');
+
+  let errors = 0;
+  let warnings = 0;
+
+  function check(condition: boolean, msg: string, isWarning = false) {
+    if (!condition) {
+      if (isWarning) { console.warn(`  ⚠️  ${msg}`); warnings++; }
+      else { console.error(`  ❌ ${msg}`); errors++; }
+    } else {
+      console.log(`  ✅ ${msg}`);
+    }
+  }
+
+  const s = config.strategy;
+
+  // ── Per-protocol position limits vs global ────────────────────────────────
+  const perProtoMax = s.maxPumpFunPositions + s.maxPumpSwapPositions
+    + (s.maxRaydiumLaunchPositions ?? 0) + (s.maxRaydiumCpmmPositions ?? 0)
+    + (s.maxRaydiumAmmV4Positions ?? 0) + (s.copyTrade.enabled ? s.copyTrade.maxPositions : 0);
+
+  check(
+    s.maxPositions <= perProtoMax,
+    `maxPositions (${s.maxPositions}) <= sum of per-protocol limits (${perProtoMax})`
+  );
+
+  // ── Max exposure vs max positions * max entry ─────────────────────────────
+  const maxEntries = [
+    s.pumpFun.entryAmountSol * s.maxPumpFunPositions,
+    s.pumpSwap.entryAmountSol * s.maxPumpSwapPositions,
+    (s.raydiumLaunch?.entryAmountSol ?? 0) * (s.maxRaydiumLaunchPositions ?? 0),
+    (s.raydiumCpmm?.entryAmountSol ?? 0) * (s.maxRaydiumCpmmPositions ?? 0),
+    (s.raydiumAmmV4?.entryAmountSol ?? 0) * (s.maxRaydiumAmmV4Positions ?? 0),
+    s.copyTrade.enabled ? s.copyTrade.entryAmountSol * s.copyTrade.maxPositions : 0,
+  ];
+  const maxPossibleExposure = maxEntries.reduce((a, b) => a + b, 0);
+
+  check(
+    s.maxTotalExposureSol >= s.pumpFun.entryAmountSol,
+    `maxTotalExposureSol (${s.maxTotalExposureSol}) >= single entry (${s.pumpFun.entryAmountSol})`
+  );
+  check(
+    s.maxTotalExposureSol <= maxPossibleExposure * 1.5,
+    `maxTotalExposureSol (${s.maxTotalExposureSol}) reasonable vs max possible (${maxPossibleExposure.toFixed(3)})`,
+    true
+  );
+
+  // ── Entry amounts: min < default ──────────────────────────────────────────
+  check(
+    s.pumpFun.minEntryAmountSol < s.pumpFun.entryAmountSol,
+    `pumpFun: minEntry (${s.pumpFun.minEntryAmountSol}) < entry (${s.pumpFun.entryAmountSol})`
+  );
+  check(
+    s.pumpSwap.minEntryAmountSol < s.pumpSwap.entryAmountSol,
+    `pumpSwap: minEntry (${s.pumpSwap.minEntryAmountSol}) < entry (${s.pumpSwap.entryAmountSol})`
+  );
+  if (s.raydiumLaunch) {
+    check(
+      s.raydiumLaunch.minEntryAmountSol < s.raydiumLaunch.entryAmountSol,
+      `raydiumLaunch: minEntry (${s.raydiumLaunch.minEntryAmountSol}) < entry (${s.raydiumLaunch.entryAmountSol})`
+    );
+  }
+  if (s.raydiumCpmm) {
+    check(
+      s.raydiumCpmm.minEntryAmountSol < s.raydiumCpmm.entryAmountSol,
+      `raydiumCpmm: minEntry (${s.raydiumCpmm.minEntryAmountSol}) < entry (${s.raydiumCpmm.entryAmountSol})`
+    );
+  }
+  if (s.raydiumAmmV4) {
+    check(
+      s.raydiumAmmV4.minEntryAmountSol < s.raydiumAmmV4.entryAmountSol,
+      `raydiumAmmV4: minEntry (${s.raydiumAmmV4.minEntryAmountSol}) < entry (${s.raydiumAmmV4.entryAmountSol})`
+    );
+  }
+
+  // ── Jito tips: min < default < max ────────────────────────────────────────
+  const j = config.jito;
+  check(
+    j.minTipAmountSol < j.tipAmountSol,
+    `jito: minTip (${j.minTipAmountSol}) < defaultTip (${j.tipAmountSol})`
+  );
+  check(
+    j.tipAmountSol < j.maxTipAmountSol,
+    `jito: defaultTip (${j.tipAmountSol}) < maxTip (${j.maxTipAmountSol})`
+  );
+
+  // ── Jito escalation: tip * factor^retries <= maxTip ───────────────────────
+  const escalatedTip = j.tipAmountSol * Math.pow(j.tipIncreaseFactor, j.maxRetries);
+  check(
+    escalatedTip <= j.maxTipAmountSol * 1.1,
+    `jito: escalated tip after ${j.maxRetries} retries (${escalatedTip.toFixed(6)}) <= maxTip (${j.maxTipAmountSol})`,
+    true
+  );
+
+  // ── Exit params: hardStop > entryStopLoss ─────────────────────────────────
+  const exitSets = [
+    { name: 'pumpFun', exit: s.pumpFun.exit },
+    { name: 'pumpSwap', exit: s.pumpSwap.exit },
+    { name: 'default', exit: s.exit },
+    { name: 'mayhem', exit: s.mayhem.exit },
+  ];
+  if (s.raydiumLaunch) exitSets.push({ name: 'raydiumLaunch', exit: s.raydiumLaunch.exit });
+  if (s.raydiumCpmm) exitSets.push({ name: 'raydiumCpmm', exit: s.raydiumCpmm.exit });
+  if (s.raydiumAmmV4) exitSets.push({ name: 'raydiumAmmV4', exit: s.raydiumAmmV4.exit });
+
+  for (const { name, exit } of exitSets) {
+    check(
+      exit.hardStopPercent > exit.entryStopLossPercent,
+      `${name}: hardStop (${exit.hardStopPercent}%) > entryStopLoss (${exit.entryStopLossPercent}%)`
+    );
+    check(
+      exit.trailingActivationPercent > exit.trailingDrawdownPercent,
+      `${name}: trailingActivation (${exit.trailingActivationPercent}%) > trailingDrawdown (${exit.trailingDrawdownPercent}%)`
+    );
+
+    // Take-profit portions should sum to ~1.0
+    const tpSum = exit.takeProfit.reduce((a: number, t: any) => a + t.portion, 0);
+    check(
+      Math.abs(tpSum - 1.0) < 0.01,
+      `${name}: takeProfit portions sum to ${tpSum.toFixed(2)} (expected 1.0)`
+    );
+
+    // Take-profit levels should be ascending
+    const levels = exit.takeProfit.map((t: any) => t.levelPercent);
+    const ascending = levels.every((v: number, i: number) => i === 0 || v > levels[i - 1]);
+    check(ascending, `${name}: takeProfit levels ascending [${levels.join(', ')}]`);
+  }
+
+  // ── Token age: min < max ──────────────────────────────────────────────────
+  check(
+    s.minTokenAgeMs < s.maxTokenAgeMs,
+    `tokenAge: min (${s.minTokenAgeMs}ms) < max (${s.maxTokenAgeMs}ms)`
+  );
+
+  // ── Slippage: reasonable range ────────────────────────────────────────────
+  for (const { name, bps } of [
+    { name: 'pumpFun', bps: s.pumpFun.slippageBps },
+    { name: 'pumpSwap', bps: s.pumpSwap.slippageBps },
+    { name: 'default', bps: s.slippageBps },
+    { name: 'mayhem', bps: s.mayhem.slippageBps },
+  ]) {
+    check(bps >= 100 && bps <= 10000, `${name}: slippage ${bps} bps in [100, 10000]`);
+  }
+
+  // ── Env variables ─────────────────────────────────────────────────────────
+  const jitoUrl = j.bundleUrl || process.env.JITO_RPC || '';
+  check(jitoUrl.length > 0, `Jito endpoint configured (JITO_BUNDLE_URL or JITO_RPC)`);
+  check(
+    jitoUrl.startsWith('http'),
+    `Jito endpoint looks like URL: ${jitoUrl.slice(0, 40)}...`,
+    true
+  );
+
+  // ── Wallet tracker consistency ────────────────────────────────────────────
+  const wt = config.walletTracker;
+  check(wt.minWinRate > 0.5 && wt.minWinRate <= 1.0, `walletTracker: minWinRate (${wt.minWinRate}) in (0.5, 1.0]`);
+  check(wt.minCompletedTrades >= 5, `walletTracker: minCompletedTrades (${wt.minCompletedTrades}) >= 5`);
+
+  console.log(`\n  Result: ${errors} errors, ${warnings} warnings`);
+  return errors;
+}
+
+/**
+ * Проверяет program IDs — что это валидные base58 публичные ключи.
+ */
+function verifyProgramIds() {
+  console.log('\n══════════════════════════════════════');
+  console.log(' Program IDs verification');
+  console.log('══════════════════════════════════════');
+
+  const ids: Record<string, string> = {
+    'PUMP_FUN':            PUMP_FUN_PROGRAM_ID,
+    'PUMP_SWAP':           config.pumpSwap.programId,
+    'FEE_PROGRAM':         'pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ',
+    'RAYDIUM_LAUNCHLAB':   'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj',
+    'RAYDIUM_CPMM':        'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C',
+    'RAYDIUM_AMM_V4':      '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8',
+  };
+
+  for (const [name, id] of Object.entries(ids)) {
+    try {
+      new PublicKey(id);
+      console.log(`  ✅ ${name.padEnd(22)} ${id}`);
+    } catch {
+      console.error(`  ❌ ${name.padEnd(22)} INVALID: ${id}`);
+    }
+  }
+}
+
 async function main() {
   console.log('\n╔════════════════════════════════════╗');
   console.log('  Solana Sniper Bot — Runtime Verify ');
@@ -333,11 +529,15 @@ async function main() {
     process.exit(1);
   }
 
+  // ── On-chain layout verification ──────────────────────────────────────────
   const global   = await verifyGlobalAccount();
   const bonding  = await verifyBondingCurve();
   const pool     = await verifyPumpSwapPool();
 
+  // ── Offline checks ────────────────────────────────────────────────────────
   printDiscriminators();
+  verifyProgramIds();
+  const configErrors = verifyConfigConsistency();
 
   const runtimeLayout = {
     generatedAt: new Date().toISOString(),
@@ -349,7 +549,12 @@ async function main() {
   await writeRuntimeLayout(runtimeLayout);
 
   console.log('\n══════════════════════════════════════');
-  console.log(' VERIFY COMPLETE');
+  if (configErrors > 0) {
+    console.log(` VERIFY COMPLETE — ${configErrors} CONFIG ERROR(S)`);
+    console.log(' ⚠️  Fix config errors before production!');
+  } else {
+    console.log(' VERIFY COMPLETE — ALL CHECKS PASSED');
+  }
   console.log('══════════════════════════════════════\n');
 }
 
