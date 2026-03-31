@@ -3,7 +3,7 @@
 // v3: RugCheck.xyz API — проверка безопасности токенов.
 //
 // Использование: sync gate из onNewToken (блокирует вход при HIGH RISK).
-// Timeout 500мс — минимальная задержка, при таймауте → risk:'unknown' (не блокирует).
+// Timeout 800мс — компромисс скорость/покрытие, при таймауте → risk:'unknown' (не блокирует).
 // Кэш 5 мин — экономит API лимит (60 req/min free tier).
 //
 // Проверяет: mint authority, freeze authority, top holders,
@@ -42,7 +42,7 @@ export async function checkRugcheck(mint: string): Promise<RugcheckResult> {
   try {
     const resp = await axios.get(
       `https://api.rugcheck.xyz/v1/tokens/${mint}/report/summary`,
-      { timeout: 500 }
+      { timeout: 800 }
     );
     const data = resp.data;
     if (!data) return cacheAndReturn(mint, { ...EMPTY, fetchTimeMs: Date.now() - t0 });

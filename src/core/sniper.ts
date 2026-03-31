@@ -2783,6 +2783,22 @@ export class Sniper {
     const mint = new PublicKey(mintStr);
     const cfg = config.strategy.raydiumLaunch;
 
+    // ── Параллельная проверка rugcheck + balance ──
+    const [rugResult, balance] = await Promise.all([
+      config.strategy.enableRugcheck ? checkRugcheck(mintStr).catch(() => null) : Promise.resolve(null),
+      this.getCachedBalance(),
+    ]);
+    if (rugResult && rugResult.risk === 'high') {
+      logger.warn(`🛑 Raydium LaunchLab Rugcheck HIGH RISK — BLOCKING: ${mintStr.slice(0,8)} score=${rugResult.score}`);
+      logEvent('RUGCHECK_BLOCKED', { mint: mintStr, score: rugResult.score, risks: rugResult.risks, path: 'raydium_launch' });
+      return;
+    }
+    const minRequired = cfg.entryAmountSol + config.jito.tipAmountSol * 2 + 0.002;
+    if (balance / 1e9 < minRequired) {
+      logger.warn(`🚫 Raydium LaunchLab: insufficient balance ${(balance/1e9).toFixed(4)} < ${minRequired.toFixed(4)}`);
+      return;
+    }
+
     try {
       const txId = await buyTokenLaunchLab(
         this.connection, mint, this.payer, cfg.entryAmountSol, cfg.slippageBps,
@@ -2831,6 +2847,22 @@ export class Sniper {
     });
 
     const cfg = config.strategy.raydiumCpmm;
+
+    // ── Параллельная проверка rugcheck + balance ──
+    const [rugResultCpmm, balanceCpmm] = await Promise.all([
+      config.strategy.enableRugcheck ? checkRugcheck(mintStr).catch(() => null) : Promise.resolve(null),
+      this.getCachedBalance(),
+    ]);
+    if (rugResultCpmm && rugResultCpmm.risk === 'high') {
+      logger.warn(`🛑 Raydium CPMM Rugcheck HIGH RISK — BLOCKING: ${mintStr.slice(0,8)} score=${rugResultCpmm.score}`);
+      logEvent('RUGCHECK_BLOCKED', { mint: mintStr, score: rugResultCpmm.score, risks: rugResultCpmm.risks, path: 'raydium_cpmm' });
+      return;
+    }
+    const minRequiredCpmm = cfg.entryAmountSol + config.jito.tipAmountSol * 2 + 0.002;
+    if (balanceCpmm / 1e9 < minRequiredCpmm) {
+      logger.warn(`🚫 Raydium CPMM: insufficient balance ${(balanceCpmm/1e9).toFixed(4)} < ${minRequiredCpmm.toFixed(4)}`);
+      return;
+    }
 
     try {
       const txId = await buyTokenCpmm(
@@ -2882,6 +2914,22 @@ export class Sniper {
     });
 
     const cfg = config.strategy.raydiumAmmV4;
+
+    // ── Параллельная проверка rugcheck + balance ──
+    const [rugResultV4, balanceV4] = await Promise.all([
+      config.strategy.enableRugcheck ? checkRugcheck(mintStr).catch(() => null) : Promise.resolve(null),
+      this.getCachedBalance(),
+    ]);
+    if (rugResultV4 && rugResultV4.risk === 'high') {
+      logger.warn(`🛑 Raydium AMM v4 Rugcheck HIGH RISK — BLOCKING: ${mintStr.slice(0,8)} score=${rugResultV4.score}`);
+      logEvent('RUGCHECK_BLOCKED', { mint: mintStr, score: rugResultV4.score, risks: rugResultV4.risks, path: 'raydium_ammv4' });
+      return;
+    }
+    const minRequiredV4 = cfg.entryAmountSol + config.jito.tipAmountSol * 2 + 0.002;
+    if (balanceV4 / 1e9 < minRequiredV4) {
+      logger.warn(`🚫 Raydium AMM v4: insufficient balance ${(balanceV4/1e9).toFixed(4)} < ${minRequiredV4.toFixed(4)}`);
+      return;
+    }
 
     try {
       const txId = await buyTokenAmmV4(
