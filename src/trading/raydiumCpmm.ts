@@ -261,6 +261,12 @@ export async function buyTokenCpmm(
   const { poolId, pool, tokenReserve, solReserve, isBaseToken } =
     await resolveCpmmPool(connection, mint, poolHint);
 
+  // Только wSOL-парные пулы (mintA или mintB должен быть wSOL)
+  const quoteMint = isBaseToken ? pool.mintB : pool.mintA;
+  if (!quoteMint.equals(WSOL_MINT)) {
+    throw new Error(`CPMM pool ${poolId.toBase58().slice(0,8)} is not wSOL-paired: quote=${quoteMint.toBase58().slice(0,8)}`);
+  }
+
   const solIn         = BigInt(Math.floor(solAmount * 1e9));
   const expectedOut   = computeSwapOut(solIn, solReserve, tokenReserve);
   const minOut        = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
@@ -339,6 +345,11 @@ export async function sellTokenCpmm(
 
   const { poolId, pool, tokenReserve, solReserve, isBaseToken } =
     await resolveCpmmPool(connection, mint, poolHint);
+
+  const quoteM = isBaseToken ? pool.mintB : pool.mintA;
+  if (!quoteM.equals(WSOL_MINT)) {
+    throw new Error(`CPMM pool ${poolId.toBase58().slice(0,8)} is not wSOL-paired: quote=${quoteM.toBase58().slice(0,8)}`);
+  }
 
   const expectedSol = computeSwapOut(tokenAmountRaw, tokenReserve, solReserve);
   const minSolOut   = (expectedSol * BigInt(10000 - slippageBps)) / 10000n;

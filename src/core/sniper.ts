@@ -1964,6 +1964,57 @@ export class Sniper {
             logEvent('BUNDLE_INVALID', { mint: token.mint, bundleId, attempt: attempt+1, txId, invalidCount });
             this.recordBundleResult(false);
             if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
+              // ── On-chain fallback: Jito status API may lie about "Invalid" ──
+              // Check if tx actually landed on-chain before removing position
+              try {
+                const sigStatus = await withRpcLimit(() => this.connection.getSignatureStatuses([txId]));
+                const status = sigStatus?.value?.[0];
+                if (status && status.confirmationStatus && !status.err) {
+                  logger.info(`🔄 Bundle "Invalid" but tx ${txId.slice(0,8)} LANDED on-chain (${status.confirmationStatus}) — treating as confirmed`);
+                  logEvent('BUNDLE_INVALID_BUT_LANDED', { mint: token.mint, txId, confirmationStatus: status.confirmationStatus });
+                  // Treat as Landed — fetch tx info and update position
+                  updateLandedStat(true);
+                  this.recordBundleResult(true);
+                  const txInfo = await withRpcLimit(() => this.connection.getTransaction(txId, {
+                    commitment: 'confirmed',
+                    maxSupportedTransactionVersion: 0,
+                  }));
+                  if (txInfo?.meta) {
+                    const postBalance = txInfo.meta.postTokenBalances?.find(
+                      (b: TokenBalance) => b.owner === this.payer.publicKey.toBase58() && b.mint === token.mint
+                    );
+                    if (postBalance) {
+                      const actualAmount = Number(postBalance.uiTokenAmount.uiAmount ?? 0);
+                      const decimals = postBalance.uiTokenAmount.decimals;
+                      if (actualAmount > 0) {
+                        const position = this.positions.get(token.mint);
+                        const pumpFunCfg = getStrategyForProtocol('pump.fun');
+                        if (position) {
+                          const actualEntryPrice = position.entryAmountSol / actualAmount;
+                          position.amount = actualAmount;
+                          position.entryPrice = actualEntryPrice;
+                          position.tokenDecimals = decimals;
+                          await this.savePositions();
+                          logger.info(`✅ Position confirmed (on-chain fallback) for ${token.mint}: ${actualAmount} tokens at ${actualEntryPrice}`);
+                          this.confirmedPositions.add(token.mint);
+                          const timeout = this.optimisticTimeouts.get(token.mint);
+                          if (timeout) { clearTimeout(timeout); this.optimisticTimeouts.delete(token.mint); }
+                          tradeLog.open({
+                            mint: token.mint, protocol: 'pump.fun', entryPrice: actualEntryPrice,
+                            amountSol: position.entryAmountSol, tokensReceived: actualAmount,
+                            slippageBps: pumpFunCfg.slippageBps, jitoTipSol: lastTipPaid, txId, openedAt: position.openedAt,
+                          });
+                          return;
+                        }
+                      }
+                    }
+                  }
+                  return; // tx landed but couldn't parse — don't remove position
+                }
+              } catch (err) {
+                logger.warn(`On-chain fallback check failed for ${token.mint}:`, err);
+              }
+
               logger.warn(`🗑️ ${invalidCount} Invalid bundles for ${token.mint} — removing optimistic position`);
               const position = this.positions.get(token.mint);
               if (position) {
@@ -2573,6 +2624,54 @@ export class Sniper {
             logEvent('BUNDLE_INVALID', { mint: mint.toBase58(), bundleId, attempt: attempt+1, txId, invalidCount });
             this.recordBundleResult(false);
             if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
+              // ── On-chain fallback: Jito status API may lie about "Invalid" ──
+              const mintStr = mint.toBase58();
+              try {
+                const sigStatus = await withRpcLimit(() => this.connection.getSignatureStatuses([txId]));
+                const status = sigStatus?.value?.[0];
+                if (status && status.confirmationStatus && !status.err) {
+                  logger.info(`🔄 PumpSwap Bundle "Invalid" but tx ${txId.slice(0,8)} LANDED on-chain (${status.confirmationStatus})`);
+                  logEvent('BUNDLE_INVALID_BUT_LANDED', { mint: mintStr, txId, confirmationStatus: status.confirmationStatus });
+                  updateLandedStat(true);
+                  this.recordBundleResult(true);
+                  const txInfoSwap = await withRpcLimit(() => this.connection.getTransaction(txId, {
+                    commitment: 'confirmed',
+                    maxSupportedTransactionVersion: 0,
+                  }));
+                  const postBalance = txInfoSwap?.meta?.postTokenBalances?.find(
+                    (b: TokenBalance) => b.owner === this.payer.publicKey.toBase58() && b.mint === mintStr
+                  );
+                  if (postBalance) {
+                    const actualAmount = Number(postBalance.uiTokenAmount.uiAmount ?? 0);
+                    const decimals = postBalance.uiTokenAmount.decimals;
+                    if (actualAmount > 0) {
+                      const pumpSwapCfg = getStrategyForProtocol('pumpswap');
+                      const entryPrice = pumpSwapCfg.entryAmountSol / actualAmount;
+                      const position = this.positions.get(mintStr);
+                      if (position) {
+                        position.amount = actualAmount;
+                        position.entryPrice = entryPrice;
+                        position.tokenDecimals = decimals;
+                        await this.savePositions();
+                        logger.info(`✅ PumpSwap position confirmed (on-chain fallback): ${actualAmount} tokens at ${entryPrice}`);
+                        this.confirmedPositions.add(mintStr);
+                        const timeout = this.optimisticTimeouts.get(mintStr);
+                        if (timeout) { clearTimeout(timeout); this.optimisticTimeouts.delete(mintStr); }
+                        tradeLog.open({
+                          mint: mintStr, protocol: 'pumpswap', entryPrice,
+                          amountSol: pumpSwapCfg.entryAmountSol, tokensReceived: actualAmount,
+                          slippageBps: pumpSwapCfg.slippageBps, jitoTipSol: lastTipPaid, txId, openedAt: position.openedAt,
+                        });
+                        return;
+                      }
+                    }
+                  }
+                  return;
+                }
+              } catch (err) {
+                logger.warn(`On-chain fallback check failed for PumpSwap ${mintStr}:`, err);
+              }
+
               logger.warn(`🗑️ ${invalidCount} Invalid bundles for PumpSwap ${mint.toBase58()} — removing optimistic position`);
               const position = this.positions.get(mint.toBase58());
               if (position) {
@@ -2770,8 +2869,17 @@ export class Sniper {
     const solAmount = Number(event.amountSol) / 1e9;
     if (solAmount < config.strategy.minIndependentBuySol) return;
 
-    // Только если видели create для этого токена
-    if (!this.seenMints.has(mintStr)) return;
+    // Авторегистрация mint при первом buy (CREATE может не прийти через geyser)
+    if (!this.seenMints.has(mintStr)) {
+      this.seenMints.set(mintStr, Date.now());
+      const mintPub = new PublicKey(mintStr);
+      updateMintState(mintPub, {
+        isRaydiumLaunch: true,
+        raydiumPool: event.pool ? new PublicKey(event.pool) : undefined,
+        creator: event.buyer ? new PublicKey(event.buyer) : undefined,
+      });
+      logger.info(`Auto-registered Raydium LaunchLab mint from buy event: ${mintStr.slice(0,8)}`);
+    }
 
     logger.info(`💰 RAYDIUM LAUNCH BUY: ${mintStr.slice(0, 8)}, sol=${solAmount.toFixed(4)}, buyer=${event.buyer.slice(0, 8)}`);
     logEvent('RAYDIUM_LAUNCH_BUY', { mint: mintStr, sol: solAmount, buyer: event.buyer });
