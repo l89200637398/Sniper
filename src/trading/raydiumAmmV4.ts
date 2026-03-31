@@ -199,23 +199,37 @@ export async function resolveAmmV4Pool(
     poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(poolId!)));
   }
 
-  // Fallback: getProgramAccounts по baseMint/quoteMint
+  // Fallback: getProgramAccounts по baseMint/quoteMint, prefer wSOL-paired pools
   if (!poolAcc) {
     const L = RAYDIUM_AMM_V4_POOL_LAYOUT;
+    let allCandidates: { pubkey: PublicKey; account: import('@solana/web3.js').AccountInfo<Buffer> }[] = [];
     for (const offset of [L.BASE_MINT_OFFSET, L.QUOTE_MINT_OFFSET]) {
       try {
         const accounts = await connection.getProgramAccounts(AMM_V4_PROGRAM, {
           commitment: 'confirmed',
           filters: [{ memcmp: { offset, bytes: mint.toBase58() } }],
         });
-        if (accounts.length > 0) {
-          poolId  = accounts[0].pubkey;
-          poolAcc = accounts[0].account;
-          break;
-        }
+        allCandidates.push(...accounts);
       } catch (e) {
         logger.warn(`AMM v4 getProgramAccounts failed (offset ${offset}): ${e}`);
       }
+    }
+    // Prefer pool where the OTHER mint is wSOL
+    for (const candidate of allCandidates) {
+      const parsed = parseAmmV4Pool(candidate.account.data);
+      const otherMint = parsed.baseMint.equals(mint) ? parsed.quoteMint : parsed.baseMint;
+      if (otherMint.equals(WSOL_MINT)) {
+        poolId  = candidate.pubkey;
+        poolAcc = candidate.account;
+        logger.debug(`AMM v4: found wSOL-paired pool ${poolId.toBase58()}`);
+        break;
+      }
+    }
+    // If no wSOL pool, use first available
+    if (!poolAcc && allCandidates.length > 0) {
+      poolId  = allCandidates[0].pubkey;
+      poolAcc = allCandidates[0].account;
+      logger.warn(`AMM v4: no wSOL-paired pool found for ${mint.toBase58().slice(0,8)}, using first available`);
     }
   }
 
@@ -258,6 +272,12 @@ export async function buyTokenAmmV4(
 
   const { poolId, pool, tokenReserve, solReserve, isBaseMint } =
     await resolveAmmV4Pool(connection, mint, poolHint);
+
+  // Validate wSOL pair
+  const quoteMint = isBaseMint ? pool.quoteMint : pool.baseMint;
+  if (!quoteMint.equals(WSOL_MINT)) {
+    throw new Error(`AMM v4 pool ${poolId.toBase58().slice(0,8)} is not wSOL-paired (quote=${quoteMint.toBase58().slice(0,8)})`);
+  }
 
   const solIn       = BigInt(Math.floor(solAmount * 1e9));
   const feeNum      = pool.tradeFeeNum > 0n ? pool.tradeFeeNum : FEE_BPS;
