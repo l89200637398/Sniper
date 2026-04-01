@@ -1839,7 +1839,7 @@ export class Sniper {
     const confirmInterval = config.timeouts.confirmIntervalMs;
     let tipMultiplier = 1.0;
     let invalidCount = 0;
-    const MAX_INVALID_BEFORE_REMOVE = 2;
+    const MAX_INVALID_BEFORE_REMOVE = 4;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(resolve => setTimeout(resolve, confirmInterval));
@@ -2551,7 +2551,7 @@ export class Sniper {
     const confirmInterval = config.timeouts.confirmIntervalMs;
     let tipMultiplier = 1.0;
     let invalidCount = 0;
-    const MAX_INVALID_BEFORE_REMOVE = 2;
+    const MAX_INVALID_BEFORE_REMOVE = 4;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await new Promise(resolve => setTimeout(resolve, confirmInterval));

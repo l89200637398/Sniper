@@ -21,16 +21,17 @@ export const config = {
   },
 
   // ─── Jito MEV ──────────────────────────────────────────────────────────────
-  // tipAmountSol: 0.000012 = ~2× p75 (было 4×). -40% на комиссиях.
-  // maxTipAmountSol: 0.00005 — жёсткий потолок (было 0.0015!).
+  // Tip: p95 обычно 0.000008-0.000023 SOL. Для конкурентного снайпинга нужен
+  // tip на уровне p95+. Static tip = 0.00003 SOL (~$0.0025) — конкурентный
+  // но не разорительный. maxTip = 0.0001 SOL (~$0.008).
   jito: {
     bundleUrl: process.env.JITO_BUNDLE_URL || process.env.JITO_RPC || '',
     statusUrl: process.env.JITO_STATUS_URL || process.env.JITO_RPC || '',
-    tipAmountSol:      0.000012,   // было 0.00002
-    maxTipAmountSol:   0.00005,    // было 0.0015 — критично!
-    minTipAmountSol:   0.000008,
-    maxRetries:        2,          // было 3
-    tipIncreaseFactor: 1.2,        // было 1.25
+    tipAmountSol:      0.00003,    // было 0.000012 → слишком низкий, bundles не приземлялись
+    maxTipAmountSol:   0.0001,     // было 0.00005 → потолок для retry escalation
+    minTipAmountSol:   0.000015,   // было 0.000008
+    maxRetries:        5,          // было 2 → слишком мало, bundle не успевал приземлиться
+    tipIncreaseFactor: 1.3,        // было 1.2
     burstCount:        1,
     burstTipMultipliers: [1.0],
   },
@@ -320,6 +321,6 @@ export const config = {
     pendingBuyTimeoutMs:         10000,
     confirmTransactionTimeoutMs: 30000,
     optimisticPositionTtlMs:     60000,
-    confirmIntervalMs:           200,
+    confirmIntervalMs:           800,    // было 200 → bundle не успевал приземлиться за 200ms
   },
 };
