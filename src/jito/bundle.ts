@@ -122,6 +122,12 @@ export async function resolveTipLamports(tipMultiplier = 1.0, urgent = false): P
   const maxTip    = Math.floor(config.jito.maxTipAmountSol * 1e9);
   const minTip    = Math.floor(config.jito.minTipAmountSol * 1e9);
 
+  // urgent-dump: не тратим раунды на ramp, сразу идём с maxTip.
+  if (urgent && (config.jito as any).urgentMaxTipImmediate) {
+    logger.debug(`Jito tip [urgent-immediate]: ${(maxTip / 1e9).toFixed(6)} SOL`);
+    return maxTip;
+  }
+
   const floor = await getTipFloor();
   const dynamicTip = urgent ? floor.p95 : floor.p75;
   const baseTip = Math.max(dynamicTip, staticTip, minTip);

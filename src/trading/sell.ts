@@ -154,7 +154,8 @@ export async function sellToken(
   urgent: boolean = false,
   isMayhem: boolean = false,
   cashbackEnabled: boolean = false,
-  directRpc: boolean = false       // ← НОВОЕ: bypass Jito, send via sendRawTransaction
+  directRpc: boolean = false,      // ← НОВОЕ: bypass Jito, send via sendRawTransaction
+  useBloXroute: boolean = false    // ← gate: bloXroute разрешён только на последней попытке sniper'а
 ): Promise<string> {
   const owner = payer.publicKey;
   const mintState = getMintState(mint);
@@ -206,7 +207,7 @@ export async function sellToken(
   // HISTORY_DEV_SNIPER: параллельная fire-and-forget отправка через bloXroute
   // для повышения landing rate. RPC остаётся primary — его ошибки пробрасываются.
   if (directRpc) {
-    const useBx = isBloXrouteEnabled();
+    const useBx = useBloXroute && isBloXrouteEnabled();
     const tx = await buildTx(useBx);
     const serialized = tx.serialize();
     if (useBx) sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
@@ -214,7 +215,7 @@ export async function sellToken(
       skipPreflight: true,
       maxRetries: 2,
     });
-    logger.info(`Sell sent via direct RPC${useBx ? ' + bloXroute' : ''}: ${sig}`);
+    logger.info(`Sell sent via direct RPC${useBx ? ' + bloXroute[tip]' : ''}: ${sig}`);
     return sig;
   }
 

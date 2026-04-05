@@ -34,6 +34,29 @@ export const config = {
     tipIncreaseFactor: 1.3,        // было 1.2
     burstCount:        1,
     burstTipMultipliers: [1.0],
+    urgentMaxTipImmediate: true,   // dump-сигнал сразу идёт с maxTipAmountSol, без ramp
+  },
+
+  // ── bloXroute Trader API (параллельная отправка sell-tx, free-tier) ────────
+  // Используется как ПОСЛЕДНЕЕ средство — только когда Jito+directRpc не справились.
+  // bloXroute требует SystemProgram.transfer ≥0.001 SOL на tipWallet внутри каждой tx.
+  // Чтобы не сжигать tip впустую: активируем только на последней попытке и только
+  // если tip составляет менее maxTipPctOfProceeds от ожидаемого выхода (по-умолчанию 5%).
+  bloxroute: {
+    enabled:              !!process.env.BLOXROUTE_AUTH_HEADER && !!process.env.BLOXROUTE_TIP_WALLET,
+    tipWallet:            process.env.BLOXROUTE_TIP_WALLET ?? '',
+    tipLamports:          Number(process.env.BLOXROUTE_TIP_LAMPORTS ?? 1_000_000),
+    // На какой попытке (0-indexed) sell-loop впервые включает bloXroute.
+    // При MAX_SELL_ATTEMPTS=4 значение 3 = только на финальной попытке.
+    minAttemptIdx:        3,
+    // Если 0.001 SOL (tip) > 5% от ожидаемого выхода — не включаем bloXroute
+    // (экономим на mёртвых / почти-дохлых позициях).
+    maxTipPctOfProceeds:  0.05,
+  },
+
+  metrics: {
+    enabled:   process.env.METRICS_ENABLED !== 'false',
+    port:      Number(process.env.METRICS_PORT ?? 9469),
   },
 
   strategy: {

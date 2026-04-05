@@ -108,8 +108,10 @@ export class WalletTracker {
         stats.wins++;
       }
     } else {
+      // Без sellSolLamports опираемся на holdTime. Сужено 4-90 сек:
+      // <4 сек = instant dump / front-run, >90 сек = stuck/bag holder.
       const holdTime = Date.now() - trade.buyTimestamp;
-      if (holdTime > 5000 && holdTime < 120_000) stats.wins++;
+      if (holdTime > 4000 && holdTime < 90_000) stats.wins++;
     }
     stats.lastSeen = Date.now();
 

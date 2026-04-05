@@ -53,6 +53,7 @@ import { PUMP_FUN_PROGRAM_ID, PUMP_SWAP_PROGRAM_ID, BONDING_CURVE_LAYOUT, PUMP_F
 import { startBlockhashCache, stopBlockhashCache, getCachedBlockhashWithHeight } from '../infra/blockhash-cache';
 import { startPriorityFeeCache, stopPriorityFeeCache, getCachedPriorityFee } from '../infra/priority-fee-cache';
 import { logEvent } from '../utils/event-logger';
+import { metrics } from '../utils/metrics';
 import { queueJitoSend } from '../infra/jito-queue';
 import { withRetry } from '../utils/retry';
 import { withRpcLimit } from '../utils/rpc-limiter';
@@ -65,7 +66,8 @@ import { checkRugcheck } from '../utils/rugcheck';
 
 const PUMP_PROGRAM_ID = new PublicKey(PUMP_FUN_PROGRAM_ID);
 const PUMP_ROUTER = new PublicKey(PUMP_FUN_ROUTER_PROGRAM_ID);
-const POSITIONS_FILE  = path.join(process.cwd(), 'data', 'positions.json');
+const POSITIONS_FILE    = path.join(process.cwd(), 'data', 'positions.json');
+const CREATE_SLOTS_FILE = path.join(process.cwd(), 'data', 'create-slots.json');
 
 function getStrategyForProtocol(protocol: string) {
   if (protocol === 'pumpswap')       return config.strategy.pumpSwap;
@@ -281,6 +283,7 @@ export class Sniper {
     logger.info(`Wallet key OK: ${derivedPubkey}`);
 
     await this.loadPositions();
+    await this.loadCreateSlots();
 
     stopBlockhashCache();
     stopPriorityFeeCache();
@@ -521,6 +524,41 @@ export class Sniper {
       logger.debug('Positions saved to disk');
     } catch (err) {
       logger.error('Failed to save positions:', err);
+    }
+  }
+
+  private createSlotsSaveTimer: NodeJS.Timeout | null = null;
+
+  private scheduleCreateSlotsSave(): void {
+    if (this.createSlotsSaveTimer) return;
+    this.createSlotsSaveTimer = setTimeout(() => {
+      this.createSlotsSaveTimer = null;
+      this.saveCreateSlots().catch(e => logger.debug('saveCreateSlots failed', e));
+    }, 5000);
+  }
+
+  private async saveCreateSlots(): Promise<void> {
+    try {
+      const arr = Array.from(this.createSlotForMint.entries());
+      await fs.mkdir(path.dirname(CREATE_SLOTS_FILE), { recursive: true });
+      await fs.writeFile(CREATE_SLOTS_FILE, JSON.stringify(arr), 'utf8');
+    } catch (err) {
+      logger.debug('saveCreateSlots error:', err);
+    }
+  }
+
+  private async loadCreateSlots(): Promise<void> {
+    try {
+      const raw = await fs.readFile(CREATE_SLOTS_FILE, 'utf8');
+      const arr = JSON.parse(raw) as Array<[string, number]>;
+      for (const [mint, slot] of arr) {
+        this.createSlotForMint.set(mint, slot);
+      }
+      logger.info(`[sniper] loaded ${arr.length} create-slots from disk`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.debug('loadCreateSlots error:', err);
+      }
     }
   }
 
@@ -1059,6 +1097,7 @@ export class Sniper {
     // HISTORY_DEV_SNIPER: запоминаем slot CREATE для детекции bundled buys
     if ((token as any).slot) {
       this.createSlotForMint.set(token.mint, (token as any).slot);
+      this.scheduleCreateSlotsSave();
     }
 
     if (this.positions.size >= config.strategy.maxPositions) {
@@ -3339,6 +3378,16 @@ export class Sniper {
       const MAX_SELL_ATTEMPTS = 4;
       const SELL_CONFIRM_DELAY_MS = 300;
 
+      // bloXroute только как последнее средство + процентный кэп
+      const bxTipSol = config.bloxroute.tipLamports / 1e9;
+      const expectedProceedsSol = position.entryAmountSol * Math.max(0.1, position.currentPrice / position.entryPrice);
+      const bxCostRatio = expectedProceedsSol > 0 ? bxTipSol / expectedProceedsSol : 1;
+      const bxAllowedByCost = config.bloxroute.enabled && bxCostRatio <= config.bloxroute.maxTipPctOfProceeds;
+      let sellPath: 'jito' | 'direct' | 'direct+bx' | 'jupiter' = 'jito';
+      if (!bxAllowedByCost && config.bloxroute.enabled) {
+        logEvent('BLOXROUTE_SKIPPED_COST', { mint: mintStr, tipSol: bxTipSol, proceedsSol: expectedProceedsSol, ratio: bxCostRatio });
+      }
+
       let confirmedTxId = '';
       let sellSuccess = false; // true только если TX confirmed AND err === null
       let lastTxId = '';
@@ -3372,6 +3421,9 @@ export class Sniper {
           }
 
           const useDirectRpc = attempt > 0; // первая попытка через Jito, retry через RPC
+          // bloXroute разрешён только на финальной попытке и только если tip <5% от выхода
+          const useBloXrouteNow = useDirectRpc && bxAllowedByCost && attempt >= config.bloxroute.minAttemptIdx;
+          sellPath = !useDirectRpc ? 'jito' : (useBloXrouteNow ? 'direct+bx' : 'direct');
           const txId = await sellTokenAuto(
             this.connection,
             position.mint,
@@ -3383,7 +3435,8 @@ export class Sniper {
             position.protocol === 'mayhem',
             position.creator ? new PublicKey(position.creator) : undefined,
             position.cashbackEnabled,
-            useDirectRpc
+            useDirectRpc,
+            useBloXrouteNow,
           );
           lastTxId = txId;
           allSentTxIds.push(txId);
@@ -3398,7 +3451,9 @@ export class Sniper {
             if (status?.confirmationStatus && !status.err) {
               confirmedTxId = allSentTxIds[i];
               sellSuccess = true;
-              logger.info(`Sell confirmed (attempt ${attempt+1}, tx #${i+1}): ${confirmedTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
+              logger.info(`Sell confirmed (attempt ${attempt+1}, tx #${i+1}, path=${sellPath}): ${confirmedTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
+              logEvent('SELL_PATH_CONFIRMED', { mint: mintStr, path: sellPath, attempt: attempt+1 });
+              metrics.inc(`sell_path_${sellPath.replace(/[^a-z]/g,'_')}_ok`);
               break;
             }
           }
@@ -3423,6 +3478,7 @@ export class Sniper {
       if (!sellSuccess) {
         logger.error(`❌ All ${MAX_SELL_ATTEMPTS} sell attempts failed for ${mintStr.slice(0,8)} — force-closing position`);
         logEvent('SELL_ALL_FAILED', { mint: mintStr, attempts: MAX_SELL_ATTEMPTS, reason: decision.reason, lastTxId });
+        metrics.inc('sell_all_failed_total');
 
         // Последняя проверка: может одна из TX всё-таки прошла через mempool
         try {
@@ -3477,6 +3533,7 @@ export class Sniper {
 
             logger.info(`✅ Jupiter fallback sell SUCCESS for ${mintStr.slice(0,8)}, received ${solReceived.toFixed(6)} SOL`);
             logEvent('JUPITER_SELL_SUCCESS', { mint: mintStr, txId: jupTxId, solReceived });
+            metrics.inc('sell_path_jupiter_ok');
 
             const totalReceived = solReceived + ((position as any).partialSolReceived ?? 0);
             this.emitTradeClose(position, mintStr, jupTxId, (decision.reason ?? 'manual') as CloseReason, decision.urgent ?? false, solReceived, closedAt);
@@ -3539,7 +3596,9 @@ export class Sniper {
         this.winTrades++;
         this.consecutiveLosses = 0;
         this.recordTradeResult(true);
+        metrics.inc('trades_won_total');
       } else {
+        metrics.inc('trades_lost_total');
         this.consecutiveLosses++;
         this.recordTradeResult(false);
         if (config.strategy.consecutiveLossesMax && this.consecutiveLosses >= config.strategy.consecutiveLossesMax) {
