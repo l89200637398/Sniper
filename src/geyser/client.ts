@@ -25,8 +25,8 @@ const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
 const geyserProto: any = grpc.loadPackageDefinition(packageDefinition).geyser;
 
 // --- Интерфейсы ---
-export interface PumpToken { mint: string; creator: string; bondingCurve: string; bondingCurveTokenAccount: string; signature: string; receivedAt: number; }
-export interface PumpBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; programIds: string[]; signature: string; }
+export interface PumpToken { mint: string; creator: string; bondingCurve: string; bondingCurveTokenAccount: string; signature: string; receivedAt: number; slot?: number; }
+export interface PumpBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; programIds: string[]; signature: string; slot?: number; }
 export interface PumpSwapNewPool { mint: string; pool: string; creator: string; quoteMint: string; signature: string; }
 export interface PumpSwapBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
 export interface PumpSwapSell { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
@@ -385,8 +385,15 @@ export class GeyserClient extends EventEmitter {
                 } else if (discriminator.equals(DISCRIMINATOR.SELL)) {
                     this.handlePumpSell(ix, message, signature, slot);
                 } else {
-                    // Только unknown — не логируем каждый BUY/SELL (снижаем спам)
-                    logger.debug(`[diag] Unknown pump discriminator: ${discriminator.toString('hex')} tx=${signature.slice(0,8)}`);
+                    // HISTORY_DEV_SNIPER: может это PumpSwap дискриминатор пришедший через CPI в pump.fun
+                    // (e445a52e = PUMP_SWAP_BUY_ALT, c62e1552 = PUMP_SWAP_BUY_EXACT_QUOTE_IN)
+                    if (DISCRIMINATOR.PUMP_SWAP_BUY_ALT && discriminator.equals(DISCRIMINATOR.PUMP_SWAP_BUY_ALT)) {
+                        this.parsePumpSwapSell(ix, message, signature, data, slot);
+                    } else if (DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN && discriminator.equals(DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN)) {
+                        this.parsePumpSwapBuy(ix, message, signature, data, slot);
+                    } else {
+                        logger.debug(`[diag] Unknown pump discriminator: ${discriminator.toString('hex')} tx=${signature.slice(0,8)}`);
+                    }
                 }
             }
 
@@ -470,6 +477,7 @@ export class GeyserClient extends EventEmitter {
                     creator,
                     signature,
                     receivedAt: Date.now(),
+                    slot,  // для детекции bundled buys (same-slot create+buy)
                 });
             }
         } catch (err) {
@@ -503,6 +511,7 @@ export class GeyserClient extends EventEmitter {
                     solLamports: isBuyExactSolIn ? amount : 0n,
                     programIds: Array.from(programIdsInTx),
                     signature,
+                    slot,  // для детекции bundled buys
                 });
             }
         } catch (err) {
@@ -610,7 +619,7 @@ export class GeyserClient extends EventEmitter {
         // Args: base_amount_in (wSOL lamports), min_quote_amount_out (min tokens)
         const mintIndex = ix.accounts?.[4];  // quoteMint = meme token (was [3], incorrect)
         if (mintIndex === undefined) {
-            logger.warn('PumpSwap buy: quoteMint index not found');
+            logger.debug('PumpSwap buy: quoteMint index not found (inner CPI or truncated accounts)');
             return;
         }
         const mint = this.keyToString(message.accountKeys[mintIndex]);
@@ -635,7 +644,7 @@ export class GeyserClient extends EventEmitter {
         // Args: base_amount_out (wSOL lamports to receive), max_quote_amount_in (max tokens to pay)
         const mintIndex = ix.accounts?.[4];  // quoteMint = meme token
         if (mintIndex === undefined) {
-            logger.warn('PumpSwap sell: quoteMint index not found');
+            logger.debug('PumpSwap sell: quoteMint index not found (inner CPI or truncated accounts)');
             return;
         }
         const mint = this.keyToString(message.accountKeys[mintIndex]);

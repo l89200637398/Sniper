@@ -209,8 +209,30 @@ export class Sniper {
     const buyer = buy.creator;
     if (buy.solLamports === 0n) return true;
     if (buy.solLamports < 30_000_000n) return true;
+    // Wallet buying 3+ different tokens in 60s = bot
     const history = this.walletBuyHistory.get(buyer);
     if (history && history.mints.size >= 3) return true;
+
+    // ── HISTORY_DEV_SNIPER — Правило 1: Bundled buy = dev wallet ───────────
+    // Buy в том же слоте (±1) что и CREATE — это bundled dev транзакция,
+    // которая создаёт фейковый спрос с разных кошельков одновременно.
+    const mintCreateSlot = this.createSlotForMint.get(buy.mint);
+    const buySlot = (buy as any).slot as number | undefined;
+    if (buySlot && mintCreateSlot && Math.abs(buySlot - mintCreateSlot) <= 1) {
+      logger.debug(`🚫 Bundled dev wallet: ${buyer.slice(0,8)} bought in create slot ±1 for ${buy.mint.slice(0,8)}`);
+      return true;
+    }
+
+    // ── HISTORY_DEV_SNIPER — Правило 3: Fresh wallet покупающий сразу ─────
+    // Нет истории (≤1 mint) и покупает в первые 3 сек после создания — dev wallet.
+    if (!history || history.mints.size <= 1) {
+      const tokenSeenAt = this.seenMints.get(buy.mint);
+      if (tokenSeenAt && Date.now() - tokenSeenAt < 3000) {
+        logger.debug(`🚫 Fresh wallet ${buyer.slice(0,8)} buying very early (<3s) for ${buy.mint.slice(0,8)}`);
+        return true;
+      }
+    }
+
     return false;
   }
 
@@ -954,7 +976,16 @@ export class Sniper {
           logger.info(`👤 Real buyer ${seen}/${needed} for ${mint.slice(0,8)}: ${buyer.slice(0,8)} spent ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL`);
           logEvent('INDEPENDENT_BUYER', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports), seen, needed });
 
-          if (seen >= needed) {
+          // ── HISTORY_DEV_SNIPER: Fast entry for large buyer ────────────────
+          // Если кто-то вложил ≥0.3 SOL — это сильный сигнал реального спроса,
+          // не нужно ждать второго independent buyer.
+          const isLargeBuy = buy.solLamports >= 300_000_000n; // 0.3 SOL
+          if (isLargeBuy && seen < needed) {
+            logger.info(`⚡ FAST ENTRY: Large buyer ${buyer.slice(0,8)} spent ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL → skipping wait`);
+            logEvent('FAST_ENTRY_LARGE_BUYER', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports) });
+          }
+
+          if (seen >= needed || isLargeBuy) {
             clearTimeout(p.timer);
             this.pendingBuys.delete(mint);
             return p;
@@ -1024,6 +1055,11 @@ export class Sniper {
       return false;
     });
     if (alreadySeen) return;
+
+    // HISTORY_DEV_SNIPER: запоминаем slot CREATE для детекции bundled buys
+    if ((token as any).slot) {
+      this.createSlotForMint.set(token.mint, (token as any).slot);
+    }
 
     if (this.positions.size >= config.strategy.maxPositions) {
       logger.debug(`Max positions reached (${this.positions.size}), skip ${token.mint}`);
@@ -1132,10 +1168,14 @@ export class Sniper {
       }
     }
 
-    // ── Параллельный запуск social + rugcheck (макс ~500мс) ──
-    // Оба — IO-bound, запускаем одновременно чтобы не тратить 500мс+500мс.
+    // ── Rugcheck блокирует entry, social запускается в фоне (HISTORY_DEV_SNIPER) ─
+    // ОПТИМИЗИРОВАНО: social check (200-2000мс) НЕ блокирует вход.
+    // Social score определяет только entry multiplier (high/low) и add-on buy.
+    // Если social ещё не вернулся — входим с socialLowMultiplier, потом
+    // scheduleSocialRetry подберёт score и сделает add-on buy.
     {
-      const socialPromise = checkSocialSignals(this.connection, mintPubkey)
+      // Запускаем social в фоне (fire-and-forget, результат подхватится позже)
+      checkSocialSignals(this.connection, mintPubkey)
         .then(social => {
           this.mintSocialScore.set(token.mint, social.score);
           (token as any)._socialScore = social.score;
@@ -1148,20 +1188,26 @@ export class Sniper {
           (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
         });
 
-      const rugPromise = config.strategy.enableRugcheck
-        ? checkRugcheck(token.mint).catch(() => null)
-        : Promise.resolve(null);
+      // Rugcheck — единственный блокирующий check (200-500мс)
+      if (config.strategy.enableRugcheck) {
+        try {
+          const rugResult = await checkRugcheck(token.mint);
+          if (rugResult) {
+            (token as any)._rugcheckResult = rugResult;
+            if (rugResult.risk === 'high') {
+              logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
+              logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
+              return;
+            }
+            logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms)`);
+          }
+        } catch {}
+      }
 
-      const [, rugResult] = await Promise.all([socialPromise, rugPromise]);
-
-      if (rugResult) {
-        (token as any)._rugcheckResult = rugResult;
-        if (rugResult.risk === 'high') {
-          logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
-          logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
-          return;
-        }
-        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms)`);
+      // Social ещё может не вернуться — используем дефолт
+      if ((token as any)._socialEntryMultiplier === undefined) {
+        (token as any)._socialScore = 0;
+        (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
       }
     }
 
@@ -1858,6 +1904,7 @@ export class Sniper {
           logger.warn(`Optimistic position for ${token.mint} timed out, removing`);
           this.unsubscribeFromPositionAccount(position);
           this.positions.delete(token.mint);
+          this.copyTradeMints.delete(token.mint);
           this.savePositions().catch(e => logger.error('Failed to save after timeout:', e));
           logEvent('OPTIMISTIC_TIMEOUT', { mint: token.mint });
         }
@@ -2002,6 +2049,7 @@ export class Sniper {
             if (position) {
               this.emitTradeClose(position, token.mint, txId, 'bundle_failed', false, 0, Date.now());
               this.positions.delete(token.mint);
+              this.copyTradeMints.delete(token.mint);
               await this.savePositions();
             }
             logEvent('BUY_FAIL', { mint: token.mint, txId, reason: `bundle_${bundleStatus}` });
@@ -2069,6 +2117,7 @@ export class Sniper {
               if (position) {
                 this.emitTradeClose(position, token.mint, txId, 'bundle_invalid_repeated', false, 0, Date.now());
                 this.positions.delete(token.mint);
+                this.copyTradeMints.delete(token.mint);
                 await this.savePositions();
               }
               logEvent('BUY_FAIL', { mint: token.mint, txId, reason: `bundle_invalid_x${invalidCount}` });
@@ -2570,6 +2619,7 @@ export class Sniper {
           logger.warn(`Optimistic PumpSwap position for ${mint.toBase58()} timed out, removing`);
           this.unsubscribeFromPositionAccount(position);
           this.positions.delete(mint.toBase58());
+          this.copyTradeMints.delete(mint.toBase58());
           this.savePositions().catch(e => logger.error('Failed to save after timeout:', e));
           logEvent('OPTIMISTIC_PUMP_SWAP_TIMEOUT', { mint: mint.toBase58() });
         }
@@ -2683,6 +2733,7 @@ export class Sniper {
             if (position) {
               this.emitTradeClose(position, mint.toBase58(), txId, 'bundle_failed', false, 0, Date.now());
               this.positions.delete(mint.toBase58());
+              this.copyTradeMints.delete(mint.toBase58());
               await this.savePositions();
             }
             logEvent('PUMP_SWAP_BUY_FAIL', { mint: mint.toBase58(), txId, reason: `bundle_${bundleStatus}` });
@@ -2746,6 +2797,7 @@ export class Sniper {
               if (position) {
                 this.emitTradeClose(position, mint.toBase58(), txId, 'bundle_invalid_repeated', false, 0, Date.now());
                 this.positions.delete(mint.toBase58());
+                this.copyTradeMints.delete(mint.toBase58());
                 await this.savePositions();
               }
               logEvent('PUMP_SWAP_BUY_FAIL', { mint: mint.toBase58(), txId, reason: `bundle_invalid_x${invalidCount}` });
@@ -2857,11 +2909,13 @@ export class Sniper {
 
       this.sellingMints.add(sell.mint);
 
-      await this.executeFullSell(position, sell.mint, {
+      // Non-blocking: не ждём завершения sell, gRPC events продолжают обрабатываться.
+      // sellingMints уже защищает от повторных sell-ов. (HISTORY_DEV_SNIPER)
+      this.executeFullSell(position, sell.mint, {
         action: 'full',
         reason: 'creator_sell',
         urgent: true,
-      });
+      }).catch(err => logger.error(`Creator sell execution failed for ${sell.mint.slice(0,8)}:`, err));
     }
   }
 
@@ -2892,11 +2946,12 @@ export class Sniper {
 
       this.sellingMints.add(sell.mint);
 
-      await this.executeFullSell(position, sell.mint, {
+      // Non-blocking: не ждём завершения sell (HISTORY_DEV_SNIPER)
+      this.executeFullSell(position, sell.mint, {
         action: 'full',
         reason: 'creator_sell',
         urgent: true,
-      });
+      }).catch(err => logger.error(`PumpSwap creator sell execution failed for ${sell.mint.slice(0,8)}:`, err));
     }
   }
 
@@ -3235,6 +3290,7 @@ export class Sniper {
             this.totalTrades++;
             this.consecutiveLosses++;
             this.positions.delete(mintStr);
+            this.copyTradeMints.delete(mintStr);
             this.sellFailureCount.delete(mintStr);
             await this.savePositions();
             this.unsubscribeFromPositionAccount(position);
@@ -3268,6 +3324,7 @@ export class Sniper {
         this.totalTrades++;
         this.consecutiveLosses++;
         this.positions.delete(mintStr);
+        this.copyTradeMints.delete(mintStr);
         this.sellFailureCount.delete(mintStr);
         await this.savePositions();
         this.unsubscribeFromPositionAccount(position);
@@ -3276,13 +3333,16 @@ export class Sniper {
 
       logEvent('SELL_ATTEMPT', { mint: mintStr, amount: position.amount, reason: decision.reason, urgent: decision.urgent });
 
-      // ── Sell loop: до 4 попыток, каждая с fresh feeRecipient ───────────────
+      // ── Sell loop: до 4 попыток, batch status check (HISTORY_DEV_SNIPER) ──
+      // ОПТИМИЗИРОВАНО: delay 300ms (было 400), flat (не растущий),
+      // batch getSignatureStatuses для ВСЕХ отправленных txId за один RPC call
       const MAX_SELL_ATTEMPTS = 4;
-      const SELL_CONFIRM_DELAY_MS = 400;
+      const SELL_CONFIRM_DELAY_MS = 300;
 
       let confirmedTxId = '';
       let sellSuccess = false; // true только если TX confirmed AND err === null
       let lastTxId = '';
+      const allSentTxIds: string[] = []; // для batch status check
 
       for (let attempt = 0; attempt < MAX_SELL_ATTEMPTS; attempt++) {
         // ADDED LOG: SELL_ATTEMPT_DETAIL before sending
@@ -3326,32 +3386,33 @@ export class Sniper {
             useDirectRpc
           );
           lastTxId = txId;
+          allSentTxIds.push(txId);
 
-          // ── FIX #1: Проверяем confirmationStatus + err ─────────────────────
-          await new Promise(r => setTimeout(r, SELL_CONFIRM_DELAY_MS * (attempt + 1)));
-          const statuses = await this.connection.getSignatureStatuses([txId]);
-          const status = statuses.value[0];
+          // ── Batch status check: проверяем ВСЕ ранее отправленные TX одним вызовом ──
+          // Экономим RPC calls и ловим TX которые приземлились позже.
+          await new Promise(r => setTimeout(r, SELL_CONFIRM_DELAY_MS));
+          const statuses = await this.connection.getSignatureStatuses(allSentTxIds);
 
-          if (!status?.confirmationStatus) {
+          for (let i = 0; i < allSentTxIds.length; i++) {
+            const status = statuses.value[i];
+            if (status?.confirmationStatus && !status.err) {
+              confirmedTxId = allSentTxIds[i];
+              sellSuccess = true;
+              logger.info(`Sell confirmed (attempt ${attempt+1}, tx #${i+1}): ${confirmedTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
+              break;
+            }
+          }
+          if (sellSuccess) break;
+
+          // Детальный лог для текущей TX
+          const currentStatus = statuses.value[statuses.value.length - 1];
+          if (!currentStatus?.confirmationStatus) {
             logger.info(`Sell attempt ${attempt+1}/${MAX_SELL_ATTEMPTS} not confirmed yet for ${mintStr.slice(0,8)}`);
             logEvent('SELL_NOT_CONFIRMED', { mint: mintStr, attempt: attempt + 1, txId: txId.slice(0,8) });
-            continue;
+          } else if (currentStatus.err) {
+            logger.warn(`Sell attempt ${attempt+1} reverted on-chain: ${JSON.stringify(currentStatus.err)} for ${mintStr.slice(0,8)}`);
+            logEvent('SELL_REVERTED_STATUS', { mint: mintStr, attempt: attempt + 1, err: JSON.stringify(currentStatus.err) });
           }
-
-          // TX on-chain — но reverted или success?
-          if (status.err) {
-            logger.warn(`Sell attempt ${attempt+1} reverted on-chain: ${JSON.stringify(status.err)} for ${mintStr.slice(0,8)}`);
-            logEvent('SELL_REVERTED_STATUS', { mint: mintStr, attempt: attempt + 1, err: JSON.stringify(status.err) });
-            // НЕ считаем confirmed — retry с fresh feeRecipient
-            continue;
-          }
-
-          // Success: confirmed + no error
-          confirmedTxId = txId;
-          sellSuccess = true;
-          logger.info(`Sell confirmed (attempt ${attempt+1}): ${txId.slice(0,8)} for ${mintStr.slice(0,8)}`);
-          break;
-
         } catch (err) {
           logger.warn(`Sell attempt ${attempt+1} exception for ${mintStr.slice(0,8)}:`, err);
         }
@@ -3375,6 +3436,7 @@ export class Sniper {
               if (solReceived > position.entryAmountSol) { this.winTrades++; this.consecutiveLosses = 0; this.recordTradeResult(true); }
               else { this.consecutiveLosses++; this.recordTradeResult(false); }
               this.positions.delete(mintStr);
+              this.copyTradeMints.delete(mintStr);
               this.sellFailureCount.delete(mintStr);
               await this.savePositions();
               this.unsubscribeFromPositionAccount(position);
@@ -3383,14 +3445,14 @@ export class Sniper {
           }
         } catch {}
 
-        // ── Jupiter fallback (HISTORY_DEV_SNIPER) ────────────────────────────
-        // Последний шанс: Jupiter агрегирует все DEX и находит маршрут
-        // даже если пул мигрировал или bonding curve кончился.
+        // ── Jupiter sell fallback (HISTORY_DEV_SNIPER) ─────────────────────────
+        // Jupiter находит маршрут через любой DEX, даже если пул мигрировал.
+        // Это решает проблему SELL_ALL_FAILED.
         try {
-          const jupSlippage = Math.min(
-            (getStrategyForProtocol(position.protocol).slippageBps ?? 2000) * 2,
-            5000,
-          );
+          logger.info(`🔄 Jupiter fallback sell for ${mintStr.slice(0,8)}...`);
+          logEvent('JUPITER_SELL_ATTEMPT', { mint: mintStr, amount: realAmountRaw.toString(), reason: decision.reason });
+
+          const jupSlippage = Math.min(5000, getStrategyForProtocol(position.protocol).slippageBps * 3);
           const jupTxId = await sellTokenJupiter(
             this.connection,
             mintStr,
@@ -3398,19 +3460,28 @@ export class Sniper {
             realAmountRaw,
             jupSlippage,
           );
-          logger.info(`[jupiter-fallback] Sent: ${jupTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
-          logEvent('JUPITER_FALLBACK_SENT', { mint: mintStr, txId: jupTxId });
 
-          // Ждём подтверждения
-          await new Promise(r => setTimeout(r, 3000));
-          const jupInfo = await this.connection.getTransaction(jupTxId, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
-          if (jupInfo?.meta && !jupInfo.meta.err) {
-            const solReceived = ((jupInfo.meta.postBalances[0] ?? 0) - (jupInfo.meta.preBalances[0] ?? 0)) / 1e9;
-            logger.info(`✅ Jupiter fallback succeeded for ${mintStr.slice(0,8)}, received ${solReceived.toFixed(6)} SOL`);
-            logEvent('JUPITER_FALLBACK_SUCCESS', { mint: mintStr, txId: jupTxId, solReceived });
-            this.emitTradeClose(position, mintStr, jupTxId, (decision.reason ?? 'manual') as CloseReason, decision.urgent ?? false, Math.max(0, solReceived), closedAt);
+          // Ждём подтверждения (Jupiter обеспечивает быстрый landing)
+          await new Promise(r => setTimeout(r, 1000));
+          const jupStatus = await this.connection.getSignatureStatuses([jupTxId]);
+          const jupStat = jupStatus.value[0];
+
+          if (jupStat?.confirmationStatus && !jupStat.err) {
+            let solReceived = 0;
+            try {
+              const txInfo = await this.connection.getTransaction(jupTxId, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+              if (txInfo?.meta && !txInfo.meta.err) {
+                solReceived = Math.max(0, ((txInfo.meta.postBalances[0] ?? 0) - (txInfo.meta.preBalances[0] ?? 0)) / 1e9);
+              }
+            } catch {}
+
+            logger.info(`✅ Jupiter fallback sell SUCCESS for ${mintStr.slice(0,8)}, received ${solReceived.toFixed(6)} SOL`);
+            logEvent('JUPITER_SELL_SUCCESS', { mint: mintStr, txId: jupTxId, solReceived });
+
+            const totalReceived = solReceived + ((position as any).partialSolReceived ?? 0);
+            this.emitTradeClose(position, mintStr, jupTxId, (decision.reason ?? 'manual') as CloseReason, decision.urgent ?? false, solReceived, closedAt);
             this.totalTrades++;
-            if (solReceived > position.entryAmountSol) { this.winTrades++; this.consecutiveLosses = 0; this.recordTradeResult(true); }
+            if (totalReceived > position.entryAmountSol) { this.winTrades++; this.consecutiveLosses = 0; this.recordTradeResult(true); }
             else { this.consecutiveLosses++; this.recordTradeResult(false); }
             this.positions.delete(mintStr);
             this.copyTradeMints.delete(mintStr);
@@ -3418,11 +3489,13 @@ export class Sniper {
             await this.savePositions();
             this.unsubscribeFromPositionAccount(position);
             return;
+          } else {
+            logger.warn(`[jupiter-sell] TX not confirmed or reverted for ${mintStr.slice(0,8)}`);
+            logEvent('JUPITER_SELL_NOT_CONFIRMED', { mint: mintStr, txId: jupTxId });
           }
-          logger.warn(`[jupiter-fallback] TX not confirmed or reverted for ${mintStr.slice(0,8)}`);
         } catch (jupErr: any) {
-          logger.warn(`[jupiter-fallback] Failed for ${mintStr.slice(0,8)}: ${jupErr?.message ?? jupErr}`);
-          logEvent('JUPITER_FALLBACK_FAILED', { mint: mintStr, error: String(jupErr?.message ?? jupErr) });
+          logger.warn(`[jupiter-sell] Fallback failed for ${mintStr.slice(0,8)}: ${jupErr?.message ?? jupErr}`);
+          logEvent('JUPITER_SELL_FAILED', { mint: mintStr, error: String(jupErr?.message ?? jupErr) });
         }
 
         // Реально не удалось продать. Принимаем потерю, удаляем позицию.
@@ -3434,6 +3507,7 @@ export class Sniper {
           this.pauseUntil = Date.now() + config.strategy.pauseAfterLossesMs;
         }
         this.positions.delete(mintStr);
+        this.copyTradeMints.delete(mintStr);
         this.sellFailureCount.delete(mintStr);
         await this.savePositions();
         this.unsubscribeFromPositionAccount(position);
@@ -3482,6 +3556,7 @@ export class Sniper {
       this.emitTradeClose(position, mintStr, confirmedTxId, decision.reason ?? 'unknown', decision.urgent ?? false, solReceived, closedAt);
       this.totalTrades++;
       this.positions.delete(mintStr);
+      this.copyTradeMints.delete(mintStr);
       await this.savePositions();
 
       this.unsubscribeFromPositionAccount(position);
@@ -3822,6 +3897,7 @@ export class Sniper {
     if (position.amount <= 1e-9) {
       logger.info(`Position ${mintStr} reduced to zero, closing`);
       this.positions.delete(mintStr);
+      this.copyTradeMints.delete(mintStr);
       await this.savePositions();
       this.unsubscribeFromPositionAccount(position);
     }

@@ -52,7 +52,7 @@ export const config = {
     maxJitoTipForEntry:   0.006,     // было 0.012
 
     // ── Серии убытков ────────────────────────────────────────────────────────
-    consecutiveLossesMax: 5,         // было 3 → слишком рано ставили на паузу (HISTORY_DEV_SNIPER P1)
+    consecutiveLossesMax: 3,         // было 5 (HISTORY_DEV_SNIPER: source file использует 3)
     pauseAfterLossesMs:   600_000,   // было 300000 → 10 мин вместо 5
 
     // ── Entry логика ─────────────────────────────────────────────────────────
