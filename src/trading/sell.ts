@@ -198,22 +198,18 @@ export async function sellToken(
     return 'sim_' + Date.now();
   }
 
-  // ── Direct RPC path (fallback): bypass Jito, параллельно RPC + bloXroute ──
+  // ── Direct RPC path (fallback): bypass Jito, send через sendRawTransaction ──
+  // HISTORY_DEV_SNIPER: параллельная fire-and-forget отправка через bloXroute
+  // для повышения landing rate. RPC остаётся primary — его ошибки пробрасываются.
   if (directRpc) {
     const tx = await buildTx();
     const serialized = tx.serialize();
-    const [rpcResult, bloxResult] = await Promise.allSettled([
-      connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 }),
-      sendViaBloXroute(Buffer.from(serialized)),
-    ]);
-    let sig: string | null = null;
-    if (rpcResult.status === 'fulfilled') sig = rpcResult.value;
-    if (!sig && bloxResult.status === 'fulfilled' && bloxResult.value) sig = bloxResult.value;
-    if (!sig) {
-      const reason = rpcResult.status === 'rejected' ? rpcResult.reason : 'unknown';
-      throw new Error(`Sell direct RPC + bloXroute failed: ${reason}`);
-    }
-    logger.info(`Sell sent via direct RPC/bloXroute: ${sig}`);
+    sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
+    const sig = await connection.sendRawTransaction(serialized, {
+      skipPreflight: true,
+      maxRetries: 2,
+    });
+    logger.info(`Sell sent via direct RPC + bloXroute: ${sig}`);
     return sig;
   }
 

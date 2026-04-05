@@ -647,18 +647,10 @@ export async function sellTokenPumpSwap(
   if (directRpc) {
     const tx = await buildTx();
     const serialized = tx.serialize();
-    const [rpcResult, bloxResult] = await Promise.allSettled([
-      connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 }),
-      sendViaBloXroute(Buffer.from(serialized)),
-    ]);
-    let sig: string | null = null;
-    if (rpcResult.status === 'fulfilled') sig = rpcResult.value;
-    if (!sig && bloxResult.status === 'fulfilled' && bloxResult.value) sig = bloxResult.value;
-    if (!sig) {
-      const reason = rpcResult.status === 'rejected' ? rpcResult.reason : 'unknown';
-      throw new Error(`PumpSwap sell direct RPC + bloXroute failed: ${reason}`);
-    }
-    logger.info(`PumpSwap sell via direct RPC/bloXroute: ${sig}`);
+    // HISTORY_DEV_SNIPER: fire-and-forget bloXroute parallel submit
+    sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
+    const sig = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 });
+    logger.info(`PumpSwap sell via direct RPC + bloXroute: ${sig}`);
     return sig;
   }
 
