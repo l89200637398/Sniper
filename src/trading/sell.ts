@@ -28,6 +28,7 @@ import {
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import { config } from '../config';
+import { sendViaBloXroute } from '../infra/bloxroute';
 import { queueJitoSend } from '../infra/jito-queue';
 import { getCachedBlockhash } from '../infra/blockhash-cache';
 import { getCachedPriorityFee } from '../infra/priority-fee-cache';
@@ -197,14 +198,22 @@ export async function sellToken(
     return 'sim_' + Date.now();
   }
 
-  // ── Direct RPC path (fallback): bypass Jito, send через sendRawTransaction ──
+  // ── Direct RPC path (fallback): bypass Jito, параллельно RPC + bloXroute ──
   if (directRpc) {
     const tx = await buildTx();
-    const sig = await connection.sendRawTransaction(tx.serialize(), {
-      skipPreflight: true,
-      maxRetries: 2,
-    });
-    logger.info(`Sell sent via direct RPC: ${sig}`);
+    const serialized = tx.serialize();
+    const [rpcResult, bloxResult] = await Promise.allSettled([
+      connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 }),
+      sendViaBloXroute(Buffer.from(serialized)),
+    ]);
+    let sig: string | null = null;
+    if (rpcResult.status === 'fulfilled') sig = rpcResult.value;
+    if (!sig && bloxResult.status === 'fulfilled' && bloxResult.value) sig = bloxResult.value;
+    if (!sig) {
+      const reason = rpcResult.status === 'rejected' ? rpcResult.reason : 'unknown';
+      throw new Error(`Sell direct RPC + bloXroute failed: ${reason}`);
+    }
+    logger.info(`Sell sent via direct RPC/bloXroute: ${sig}`);
     return sig;
   }
 
