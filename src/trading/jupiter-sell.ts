@@ -17,7 +17,9 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import { logger } from '../utils/logger';
-import { sendViaBloXroute } from '../infra/bloxroute';
+// Note: bloXroute submission is NOT used for Jupiter tx because bloXroute requires
+// a SystemProgram.transfer tip instruction inside the tx, but Jupiter returns an
+// already-built tx we can't mutate. RPC is the primary (and only) path here.
 
 const WSOL_MINT = 'So11111111111111111111111111111111111111112';
 const JUPITER_API_KEY = process.env.JUPITER_API_KEY ?? '';
@@ -82,29 +84,17 @@ export async function sellTokenJupiter(
     throw new Error(`[jupiter-sell] No swap transaction returned for ${mintStr.slice(0, 8)}`);
   }
 
-  // 3. Sign + send (RPC + bloXroute parallel)
+  // 3. Sign + send via primary RPC
   const txBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
   const tx = VersionedTransaction.deserialize(txBuf);
   tx.sign([payer]);
 
   const serialized = tx.serialize();
 
-  const [rpcResult, bloxResult] = await Promise.allSettled([
-    connection.sendRawTransaction(serialized, {
-      skipPreflight: true,
-      maxRetries: 2,
-    }),
-    sendViaBloXroute(Buffer.from(serialized)),
-  ]);
-
-  let txId: string | null = null;
-  if (rpcResult.status === 'fulfilled') txId = rpcResult.value;
-  if (!txId && bloxResult.status === 'fulfilled' && bloxResult.value) txId = bloxResult.value;
-
-  if (!txId) {
-    const rpcErr = rpcResult.status === 'rejected' ? rpcResult.reason : 'unknown';
-    throw new Error(`[jupiter-sell] Both RPC and bloXroute failed: ${rpcErr}`);
-  }
+  const txId = await connection.sendRawTransaction(serialized, {
+    skipPreflight: true,
+    maxRetries: 2,
+  });
 
   logger.info(`[jupiter-sell] TX sent: ${txId.slice(0, 8)}... for ${mintStr.slice(0, 8)} (${outAmountSol.toFixed(6)} SOL expected)`);
   return txId;
