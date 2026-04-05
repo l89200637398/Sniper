@@ -8,10 +8,43 @@
 // если нет — основной канал всё равно работает.
 // Портировано из HISTORY_DEV_SNIPER.
 
+import { PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
 import { logger } from '../utils/logger';
 
 const BLOXROUTE_ENDPOINT = process.env.BLOXROUTE_ENDPOINT ?? 'https://ny.solana.dex.blxrbdn.com/api/v2/submit';
 const AUTH_HEADER = process.env.BLOXROUTE_AUTH_HEADER ?? '';
+const TIP_WALLET = process.env.BLOXROUTE_TIP_WALLET ?? '';
+const TIP_LAMPORTS = BigInt(process.env.BLOXROUTE_TIP_LAMPORTS ?? '1000000'); // 0.001 SOL min per bloXroute docs
+
+let cachedTipPubkey: PublicKey | null = null;
+function getTipPubkey(): PublicKey | null {
+  if (!TIP_WALLET) return null;
+  if (!cachedTipPubkey) {
+    try { cachedTipPubkey = new PublicKey(TIP_WALLET); }
+    catch (e: any) { logger.warn(`[bloxroute] Invalid BLOXROUTE_TIP_WALLET: ${e?.message ?? e}`); return null; }
+  }
+  return cachedTipPubkey;
+}
+
+/**
+ * Возвращает SystemProgram.transfer инструкцию на tip-кошелёк bloXroute.
+ * bloXroute Trader API требует, чтобы каждая отправляемая через них транзакция
+ * содержала перевод ≥0.001 SOL на один из их tip-кошельков, иначе BDN отклоняет tx.
+ * Возвращает null, если tip не настроен — в этом случае bloXroute отключён.
+ */
+export function getBloXrouteTipInstruction(payer: PublicKey): TransactionInstruction | null {
+  const tip = getTipPubkey();
+  if (!tip) return null;
+  return SystemProgram.transfer({
+    fromPubkey: payer,
+    toPubkey: tip,
+    lamports: Number(TIP_LAMPORTS),
+  });
+}
+
+export function isBloXrouteTipConfigured(): boolean {
+  return !!AUTH_HEADER && !!getTipPubkey();
+}
 
 /**
  * Отправляет подписанную транзакцию через bloXroute Trader API.
@@ -61,5 +94,5 @@ export async function sendViaBloXroute(serializedTx: Buffer | Uint8Array): Promi
 }
 
 export function isBloXrouteEnabled(): boolean {
-  return !!AUTH_HEADER;
+  return !!AUTH_HEADER && !!getTipPubkey();
 }

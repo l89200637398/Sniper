@@ -28,7 +28,7 @@ import {
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import { config } from '../config';
-import { sendViaBloXroute } from '../infra/bloxroute';
+import { sendViaBloXroute, getBloXrouteTipInstruction, isBloXrouteEnabled } from '../infra/bloxroute';
 import { queueJitoSend } from '../infra/jito-queue';
 import { getCachedBlockhash } from '../infra/blockhash-cache';
 import { getCachedPriorityFee } from '../infra/priority-fee-cache';
@@ -175,13 +175,17 @@ export async function sellToken(
 
   const priorityFee = getCachedPriorityFee();
 
-  const buildTx = async (): Promise<VersionedTransaction> => {
+  const buildTx = async (includeBloXrouteTip: boolean = false): Promise<VersionedTransaction> => {
     const blockhash = await getCachedBlockhash();
     const instructions = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
       sellIx,
     ];
+    if (includeBloXrouteTip) {
+      const tipIx = getBloXrouteTipInstruction(owner);
+      if (tipIx) instructions.push(tipIx);
+    }
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
     }).compileToV0Message();
@@ -202,14 +206,15 @@ export async function sellToken(
   // HISTORY_DEV_SNIPER: параллельная fire-and-forget отправка через bloXroute
   // для повышения landing rate. RPC остаётся primary — его ошибки пробрасываются.
   if (directRpc) {
-    const tx = await buildTx();
+    const useBx = isBloXrouteEnabled();
+    const tx = await buildTx(useBx);
     const serialized = tx.serialize();
-    sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
+    if (useBx) sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
     const sig = await connection.sendRawTransaction(serialized, {
       skipPreflight: true,
       maxRetries: 2,
     });
-    logger.info(`Sell sent via direct RPC + bloXroute: ${sig}`);
+    logger.info(`Sell sent via direct RPC${useBx ? ' + bloXroute' : ''}: ${sig}`);
     return sig;
   }
 

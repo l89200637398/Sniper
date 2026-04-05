@@ -60,7 +60,7 @@ import {
 import { sha256 }      from '../utils/sha';
 import { withRetry }   from '../utils/retry';
 import { withRpcLimit } from '../utils/rpc-limiter';
-import { sendViaBloXroute } from '../infra/bloxroute';
+import { sendViaBloXroute, getBloXrouteTipInstruction, isBloXrouteEnabled } from '../infra/bloxroute';
 
 const PUMP_SWAP_PROGRAM = new PublicKey(PUMP_SWAP_PROGRAM_ID);
 const PUMP_PROGRAM      = new PublicKey(PUMP_FUN_PROGRAM_ID);
@@ -617,7 +617,7 @@ export async function sellTokenPumpSwap(
 
   const wsolAta = accs.userQuoteTokenAccount;
 
-  const buildTx = async (): Promise<VersionedTransaction> => {
+  const buildTx = async (includeBloXrouteTip: boolean = false): Promise<VersionedTransaction> => {
     const { blockhash } = await getCachedBlockhashWithHeight();
     const instructions = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
@@ -629,6 +629,10 @@ export async function sellTokenPumpSwap(
       // Bot SELL = IDL sell
       buildSellInstruction(accs, tokenAmountRaw, minSolOut, owner, poolState.isCashbackCoin),
     ];
+    if (includeBloXrouteTip) {
+      const tipIx = getBloXrouteTipInstruction(owner);
+      if (tipIx) instructions.push(tipIx);
+    }
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
     }).compileToV0Message();
@@ -645,12 +649,13 @@ export async function sellTokenPumpSwap(
   }
 
   if (directRpc) {
-    const tx = await buildTx();
+    const useBx = isBloXrouteEnabled();
+    const tx = await buildTx(useBx);
     const serialized = tx.serialize();
-    // HISTORY_DEV_SNIPER: fire-and-forget bloXroute parallel submit
-    sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
+    // HISTORY_DEV_SNIPER: fire-and-forget bloXroute parallel submit (with required tip)
+    if (useBx) sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
     const sig = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 });
-    logger.info(`PumpSwap sell via direct RPC + bloXroute: ${sig}`);
+    logger.info(`PumpSwap sell via direct RPC${useBx ? ' + bloXroute' : ''}: ${sig}`);
     return sig;
   }
 
