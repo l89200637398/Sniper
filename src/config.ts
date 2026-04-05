@@ -52,7 +52,7 @@ export const config = {
     maxJitoTipForEntry:   0.006,     // было 0.012
 
     // ── Серии убытков ────────────────────────────────────────────────────────
-    consecutiveLossesMax: 3,         // было 5
+    consecutiveLossesMax: 5,         // было 3 → слишком рано ставили на паузу (HISTORY_DEV_SNIPER P1)
     pauseAfterLossesMs:   600_000,   // было 300000 → 10 мин вместо 5
 
     // ── Entry логика ─────────────────────────────────────────────────────────
@@ -69,13 +69,13 @@ export const config = {
     minIndependentBuySol:  0.15,     // было 0.05
     waitForBuyerTimeoutMs: 3000,     // было 10000
     // earlyExitTimeoutMs: 800 — быстрый выход при слабых токенах
-    earlyExitTimeoutMs:    800,      // было 1500
+    earlyExitTimeoutMs:    2000,     // было 800 → срезало profitable trades (HISTORY_DEV_SNIPER P0)
 
     // ── v3 Scoring ────────────────────────────────────────────────────────────
     // ВАЖНО: scoring при входе = только creatorRecentTokens (sync).
     // Полный scoring с social/rugcheck — при add-on buy.
     enableScoring:     true,
-    minTokenScore:     25,           // было 15 — слишком мягкий
+    minTokenScore:     40,           // было 25 → отсекаем низкокачественные токены (HISTORY_DEV_SNIPER P1)
     enableRugcheck:    true,
 
     // ── Copy-Trade: CT-2 активирован ─────────────────────────────────────────
@@ -93,7 +93,7 @@ export const config = {
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
     pumpFun: {
       entryAmountSol:    0.05,
-      minEntryAmountSol: 0.005,      // было 0.02 → исправлен баг клампинга
+      minEntryAmountSol: 0.015,      // было 0.005 (HISTORY_DEV_SNIPER: отсечка dust-входов)
       minLiquiditySol:   0.04,
       slippageBps:       2500,
       exit: {
@@ -105,7 +105,7 @@ export const config = {
         slowDrawdownPercent:           30,
         slowDrawdownMinDurationMs:     800,
         hardStopPercent:               40,
-        stagnationWindowMs:        60_000,
+        stagnationWindowMs:        35_000,   // было 60000 → быстрее выходим из stuck трейдов (HISTORY_DEV_SNIPER)
         stagnationMinMove:             0.08,
         timeStopAfterMs:           90_000,
         timeStopMinPnl:               -0.05,
@@ -122,7 +122,7 @@ export const config = {
     // ── PumpSwap AMM ──────────────────────────────────────────────────────────
     pumpSwap: {
       entryAmountSol:        0.05,
-      minEntryAmountSol:     0.005,  // было 0.02
+      minEntryAmountSol:     0.015,  // было 0.005 (HISTORY_DEV_SNIPER)
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,
@@ -151,7 +151,7 @@ export const config = {
 
     // ── Общие параметры (fallback) ────────────────────────────────────────────
     entryAmountSol:    0.05,
-    minEntryAmountSol: 0.005,        // было 0.02
+    minEntryAmountSol: 0.015,        // было 0.005 (HISTORY_DEV_SNIPER)
     minLiquiditySol:   0.05,
     slippageBps:       1500,
     exit: {
@@ -181,7 +181,7 @@ export const config = {
     maxRaydiumLaunchPositions: 1,
     raydiumLaunch: {
       entryAmountSol:    0.05,
-      minEntryAmountSol: 0.005,
+      minEntryAmountSol: 0.015,
       minLiquiditySol:   0.04,
       slippageBps:       2500,
       exit: {
@@ -211,7 +211,7 @@ export const config = {
     maxRaydiumCpmmPositions: 1,
     raydiumCpmm: {
       entryAmountSol:        0.05,
-      minEntryAmountSol:     0.005,
+      minEntryAmountSol:     0.015,
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,
@@ -242,7 +242,7 @@ export const config = {
     maxRaydiumAmmV4Positions: 1,
     raydiumAmmV4: {
       entryAmountSol:        0.05,
-      minEntryAmountSol:     0.005,
+      minEntryAmountSol:     0.015,
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,

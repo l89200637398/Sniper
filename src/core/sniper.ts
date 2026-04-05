@@ -2799,7 +2799,7 @@ export class Sniper {
     if (!this.running) return;
 
     // v3: записываем sell для wallet tracker (всегда, до других проверок)
-    this.walletTracker.recordSell(sell.seller, sell.mint);
+    this.walletTracker.recordSell(sell.seller, sell.mint, Number(sell.solLamports ?? 0));
 
     if (!config.strategy.creatorSellExit) return;
 
@@ -2834,7 +2834,7 @@ export class Sniper {
     logEvent('PUMP_SWAP_SELL_DETECTED', { mint: sell.mint, amount: sell.amount.toString() });
 
     // v3: записываем sell для wallet tracker
-    this.walletTracker.recordSell(sell.creator, sell.mint);
+    this.walletTracker.recordSell(sell.creator, sell.mint, Number(sell.solLamports ?? 0));
 
     if (!config.strategy.creatorSellExit) return;
 
