@@ -29,8 +29,8 @@ export interface PumpToken { mint: string; creator: string; bondingCurve: string
 export interface PumpBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; programIds: string[]; signature: string; }
 export interface PumpSwapNewPool { mint: string; pool: string; creator: string; quoteMint: string; signature: string; }
 export interface PumpSwapBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
-export interface PumpSwapSell { mint: string; creator: string; amount: bigint; signature: string; }
-export interface PumpFunSell { mint: string; seller: string; amount: bigint; signature: string; }
+export interface PumpSwapSell { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
+export interface PumpFunSell { mint: string; seller: string; amount: bigint; solLamports: bigint; signature: string; }
 
 // --- Raydium интерфейсы ---
 export interface RaydiumLaunchCreate { mint: string; pool: string; creator: string; signature: string; receivedAt: number; }
@@ -518,6 +518,8 @@ export class GeyserClient extends EventEmitter {
                     : Buffer.from(ix.data);
 
             const amount = sanitizeAmount(data.readBigUInt64LE(8));
+            // pump.fun sell args: amount (u64 @ 8), min_sol_output (u64 @ 16)
+            const solLamports = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n);
             const mintIndex = ix.accounts?.[2];
             const sellerIndex = ix.accounts?.[6];
             if (mintIndex === undefined || sellerIndex === undefined) return;
@@ -525,8 +527,8 @@ export class GeyserClient extends EventEmitter {
             const mint = this.keyToString(message.accountKeys[mintIndex]);
             const seller = this.keyToString(message.accountKeys[sellerIndex]);
             if (mint && seller) {
-                logger.debug(`📤 PUMP SELL: ${mint}, seller=${seller.slice(0,8)}, amount=${amount}, slot=${slot}, tx=${signature.slice(0,8)}`);
-                this.emit('pumpFunSellDetected', { mint, seller, amount, signature });
+                logger.debug(`📤 PUMP SELL: ${mint}, seller=${seller.slice(0,8)}, amount=${amount}, sol=${Number(solLamports)/1e9}, slot=${slot}, tx=${signature.slice(0,8)}`);
+                this.emit('pumpFunSellDetected', { mint, seller, amount, solLamports, signature });
             }
         } catch (err) {
             logger.error('Error handling Pump SELL:', err);
@@ -647,6 +649,7 @@ export class GeyserClient extends EventEmitter {
             mint,
             creator:  this.keyToString(message.accountKeys[0]),
             amount:   tokenAmount,
+            solLamports,
             signature,
         });
     }

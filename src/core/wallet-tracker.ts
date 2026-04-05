@@ -89,7 +89,7 @@ export class WalletTracker {
   }
 
   /** Записать продажу кошелька и обновить win/loss статистику */
-  recordSell(wallet: string, mint: string): void {
+  recordSell(wallet: string, mint: string, sellSolLamports?: number): void {
     const stats = this.wallets.get(wallet);
     if (!stats) return;
     const trade = stats.trades.find(t => t.mint === mint && !t.sold);
@@ -97,9 +97,15 @@ export class WalletTracker {
 
     trade.sold = true;
     stats.completedTrades++;
-    // Heuristic: удержал > 3 сек = скорее win (instant dump = loss)
-    const holdTime = Date.now() - trade.buyTimestamp;
-    if (holdTime > 3000) stats.wins++;
+    // HISTORY_DEV_SNIPER: prefer PnL-based win detection when sell SOL is known.
+    // Fallback к holdTime-эвристике если sellSolLamports не передан (0 = sentinel).
+    if (sellSolLamports && sellSolLamports > 0) {
+      // Win если вернули хотя бы 98% вложенного SOL (учитываем комиссии)
+      if (sellSolLamports > trade.buySolLamports * 0.98) stats.wins++;
+    } else {
+      const holdTime = Date.now() - trade.buyTimestamp;
+      if (holdTime > 3000) stats.wins++;
+    }
     stats.lastSeen = Date.now();
 
     // Пересчитать eligible статус
