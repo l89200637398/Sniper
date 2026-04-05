@@ -61,10 +61,10 @@ export const config = {
 
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
-    maxPositions:         3,         // было 4
-    maxPumpFunPositions:  2,         // было 3
+    maxPositions:         4,         // 3→4: расширяем слоты для throughput (15 SOL/нед патч)
+    maxPumpFunPositions:  3,         // 2→3: p.fun — основной источник, больше одновременных
     maxPumpSwapPositions: 1,
-    maxTotalExposureSol:  0.25,      // было 0.60 → Balanced Battle Config: 0.25
+    maxTotalExposureSol:  0.60,      // 0.25→0.60: баланс под новые entry 0.15 × 4 = 0.60
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
@@ -89,7 +89,7 @@ export const config = {
 
     // ── Entry timing ─────────────────────────────────────────────────────────
     // minIndependentBuySol: 0.15 — только реальные деньги копируем
-    minIndependentBuySol:  0.15,     // было 0.05
+    minIndependentBuySol:  0.25,     // 0.15→0.25: только значимые входы (15 SOL/нед патч)
     waitForBuyerTimeoutMs: 3000,     // было 10000
     // earlyExitTimeoutMs: 800 — быстрый выход при слабых токенах
     earlyExitTimeoutMs:    2000,     // было 800 → срезало profitable trades (HISTORY_DEV_SNIPER P0)
@@ -98,7 +98,7 @@ export const config = {
     // ВАЖНО: scoring при входе = только creatorRecentTokens (sync).
     // Полный scoring с social/rugcheck — при add-on buy.
     enableScoring:     true,
-    minTokenScore:     40,           // было 25 → отсекаем низкокачественные токены (HISTORY_DEV_SNIPER P1)
+    minTokenScore:     50,           // 40→50: только A/A+ setups (15 SOL/нед патч)
     enableRugcheck:    true,
 
     // ── Copy-Trade: CT-2 активирован ─────────────────────────────────────────
@@ -115,37 +115,39 @@ export const config = {
 
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
     pumpFun: {
-      entryAmountSol:    0.05,
-      minEntryAmountSol: 0.015,      // было 0.005 (HISTORY_DEV_SNIPER: отсечка dust-входов)
+      entryAmountSol:    0.15,               // 0.05→0.15 (15 SOL/нед патч)
+      minEntryAmountSol: 0.05,               // 0.015→0.05: согласовано с новым entry
       minLiquiditySol:   0.04,
       slippageBps:       2500,
       exit: {
-        entryStopLossPercent:          25,
+        entryStopLossPercent:          20,   // 25→20: быстрее режем losers (15 SOL/нед патч)
         velocityDropPercent:           15,   // v3
         velocityWindowMs:              500,  // v3
         trailingActivationPercent:     25,
-        trailingDrawdownPercent:       12,
+        trailingDrawdownPercent:       9,    // 12→9: не отдаём прибыль reversal'ам (15 SOL/нед патч)
         slowDrawdownPercent:           30,
         slowDrawdownMinDurationMs:     800,
         hardStopPercent:               40,
-        stagnationWindowMs:        35_000,   // было 60000 → быстрее выходим из stuck трейдов (HISTORY_DEV_SNIPER)
+        stagnationWindowMs:        35_000,
         stagnationMinMove:             0.08,
-        timeStopAfterMs:           90_000,
+        timeStopAfterMs:           60_000,   // 90k→60k: быстрее освобождаем слоты (15 SOL/нед патч)
         timeStopMinPnl:               -0.05,
-        breakEvenAfterTrailingPercent: -1.5, // было -2 → умирают у -1%
+        breakEvenAfterTrailingPercent: -1.5,
+        // Перебалансированный TP ladder (15 SOL/нед патч):
+        // Раньше 8%/0.20 срезал winners слишком рано; теперь больший вес на mid-run (80%).
         takeProfit: [
-          { levelPercent:   8, portion: 0.20 },
-          { levelPercent:  20, portion: 0.10 },
-          { levelPercent:  50, portion: 0.40 },
-          { levelPercent: 150, portion: 0.30 },
+          { levelPercent:  12, portion: 0.15 },
+          { levelPercent:  30, portion: 0.15 },
+          { levelPercent:  80, portion: 0.40 },
+          { levelPercent: 200, portion: 0.30 },
         ],
       },
     },
 
     // ── PumpSwap AMM ──────────────────────────────────────────────────────────
     pumpSwap: {
-      entryAmountSol:        0.05,
-      minEntryAmountSol:     0.015,  // было 0.005 (HISTORY_DEV_SNIPER)
+      entryAmountSol:        0.15,   // 0.05→0.15 (15 SOL/нед патч)
+      minEntryAmountSol:     0.05,   // 0.015→0.05: согласовано с новым entry
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,
@@ -173,8 +175,8 @@ export const config = {
     },
 
     // ── Общие параметры (fallback) ────────────────────────────────────────────
-    entryAmountSol:    0.05,
-    minEntryAmountSol: 0.015,        // было 0.005 (HISTORY_DEV_SNIPER)
+    entryAmountSol:    0.15,         // 0.05→0.15 (15 SOL/нед патч)
+    minEntryAmountSol: 0.05,         // 0.015→0.05: согласовано с новым entry
     minLiquiditySol:   0.05,
     slippageBps:       1500,
     exit: {
