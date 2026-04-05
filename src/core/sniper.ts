@@ -57,6 +57,7 @@ import { queueJitoSend } from '../infra/jito-queue';
 import { withRetry } from '../utils/retry';
 import { withRpcLimit } from '../utils/rpc-limiter';
 import { getRuntimeLayout } from '../runtime-layout';
+import { sellTokenJupiter } from '../trading/jupiter-sell';
 import { detectProtocol } from './detector';
 import { WalletTracker } from './wallet-tracker';
 import { scoreToken, TokenFeatures } from '../utils/token-scorer';
@@ -161,6 +162,14 @@ export class Sniper {
 
   // v3: Wallet Tracker для copy-trading (Stage 2)
   private walletTracker: WalletTracker;
+
+  // HISTORY_DEV_SNIPER: множество mint-ов, открытых через copy-trade
+  // (для лимита copyTrade.maxPositions)
+  private copyTradeMints: Set<string> = new Set();
+
+  private get copyTradeCount(): number {
+    return [...this.copyTradeMints].filter(m => this.positions.has(m)).length;
+  }
 
   private get pumpFunCount(): number {
     return [...this.positions.values()].filter(p => p.protocol === 'pump.fun' || p.protocol === 'mayhem').length;
@@ -821,17 +830,45 @@ export class Sniper {
     if (!isSelfWallet) {
       this.walletTracker.recordBuy(buyer, mint, Number(buy.solLamports));
 
-      // ── v3: Copy-trade signal ──
+      // ── v3: Copy-trade signal → EXEC (HISTORY_DEV_SNIPER) ──
       if (config.strategy.copyTrade.enabled &&
           !this.positions.has(mint) && !this.pendingBuys.has(mint) &&
           this.walletTracker.isCopySignal(buyer, Number(buy.solLamports)) &&
           this.positions.size < config.strategy.maxPositions) {
-        const totalExposure = [...this.positions.values()].reduce((s, p) => s + p.entryAmountSol, 0);
-        if (totalExposure < config.strategy.maxTotalExposureSol) {
-          logger.info(`🎯 COPY-TRADE: ${buyer.slice(0,8)} bought ${mint.slice(0,8)} for ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL`);
-          logEvent('COPY_TRADE_SIGNAL', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports) });
-          // Copy-trade uses the same entry path: add to pending with high multiplier
-          // For now just log the signal — actual entry requires executePendingBuy integration
+        if (this.copyTradeCount >= config.strategy.copyTrade.maxPositions) {
+          logger.debug(`CT skip: already ${this.copyTradeCount} CT position(s)`);
+        } else {
+          const totalExposure = [...this.positions.values()].reduce((s, p) => s + p.entryAmountSol, 0);
+          if (totalExposure + config.strategy.copyTrade.entryAmountSol <= config.strategy.maxTotalExposureSol) {
+            logger.info(`🎯 COPY-TRADE EXEC: ${buyer.slice(0,8)} bought ${mint.slice(0,8)} for ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL`);
+            logEvent('COPY_TRADE_EXEC', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports) });
+
+            // bondingCurve детерминированно вычисляем из mint (PDA)
+            const ctMintPk = new PublicKey(mint);
+            const ctBondingCurve = getBondingCurvePDA(ctMintPk);
+
+            const ctToken: PumpToken = {
+              mint,
+              creator: buy.creator,
+              bondingCurve: ctBondingCurve.toBase58(),
+              bondingCurveTokenAccount: '',
+              signature: buy.signature,
+              receivedAt: Date.now(),
+            };
+
+            // _socialEntryMultiplier управляет суммой входа в executePendingBuy:
+            //   adjustedEntry = pumpFun.entryAmountSol * multiplier
+            // Нам нужен copyTrade.entryAmountSol (0.03) → multiplier = 0.03 / 0.05 = 0.6
+            (ctToken as any)._socialEntryMultiplier =
+              config.strategy.copyTrade.entryAmountSol / config.strategy.pumpFun.entryAmountSol;
+
+            this.copyTradeMints.add(mint);
+
+            this.executePendingBuy(ctToken).catch(err => {
+              logger.error(`Copy-trade buy failed for ${mint}:`, err);
+              this.copyTradeMints.delete(mint);
+            });
+          }
         }
       }
     }
@@ -3345,6 +3382,48 @@ export class Sniper {
             }
           }
         } catch {}
+
+        // ── Jupiter fallback (HISTORY_DEV_SNIPER) ────────────────────────────
+        // Последний шанс: Jupiter агрегирует все DEX и находит маршрут
+        // даже если пул мигрировал или bonding curve кончился.
+        try {
+          const jupSlippage = Math.min(
+            (getStrategyForProtocol(position.protocol).slippageBps ?? 2000) * 2,
+            5000,
+          );
+          const jupTxId = await sellTokenJupiter(
+            this.connection,
+            mintStr,
+            this.payer,
+            realAmountRaw,
+            jupSlippage,
+          );
+          logger.info(`[jupiter-fallback] Sent: ${jupTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
+          logEvent('JUPITER_FALLBACK_SENT', { mint: mintStr, txId: jupTxId });
+
+          // Ждём подтверждения
+          await new Promise(r => setTimeout(r, 3000));
+          const jupInfo = await this.connection.getTransaction(jupTxId, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+          if (jupInfo?.meta && !jupInfo.meta.err) {
+            const solReceived = ((jupInfo.meta.postBalances[0] ?? 0) - (jupInfo.meta.preBalances[0] ?? 0)) / 1e9;
+            logger.info(`✅ Jupiter fallback succeeded for ${mintStr.slice(0,8)}, received ${solReceived.toFixed(6)} SOL`);
+            logEvent('JUPITER_FALLBACK_SUCCESS', { mint: mintStr, txId: jupTxId, solReceived });
+            this.emitTradeClose(position, mintStr, jupTxId, (decision.reason ?? 'manual') as CloseReason, decision.urgent ?? false, Math.max(0, solReceived), closedAt);
+            this.totalTrades++;
+            if (solReceived > position.entryAmountSol) { this.winTrades++; this.consecutiveLosses = 0; this.recordTradeResult(true); }
+            else { this.consecutiveLosses++; this.recordTradeResult(false); }
+            this.positions.delete(mintStr);
+            this.copyTradeMints.delete(mintStr);
+            this.sellFailureCount.delete(mintStr);
+            await this.savePositions();
+            this.unsubscribeFromPositionAccount(position);
+            return;
+          }
+          logger.warn(`[jupiter-fallback] TX not confirmed or reverted for ${mintStr.slice(0,8)}`);
+        } catch (jupErr: any) {
+          logger.warn(`[jupiter-fallback] Failed for ${mintStr.slice(0,8)}: ${jupErr?.message ?? jupErr}`);
+          logEvent('JUPITER_FALLBACK_FAILED', { mint: mintStr, error: String(jupErr?.message ?? jupErr) });
+        }
 
         // Реально не удалось продать. Принимаем потерю, удаляем позицию.
         this.emitTradeClose(position, mintStr, lastTxId, (decision.reason ?? 'rpc_error') as CloseReason, decision.urgent ?? false, 0, closedAt);
