@@ -600,6 +600,7 @@ export async function sellTokenPumpSwap(
   slippageBps:     number  = config.strategy.slippageBps,
   urgent:          boolean = false,
   directRpc:       boolean = false,
+  useBloXroute:    boolean = false,
 ): Promise<string> {
   const owner       = payer.publicKey;
   const priorityFee = getCachedPriorityFee();
@@ -649,13 +650,13 @@ export async function sellTokenPumpSwap(
   }
 
   if (directRpc) {
-    const useBx = isBloXrouteEnabled();
+    const useBx = useBloXroute && isBloXrouteEnabled();
     const tx = await buildTx(useBx);
     const serialized = tx.serialize();
     // HISTORY_DEV_SNIPER: fire-and-forget bloXroute parallel submit (with required tip)
     if (useBx) sendViaBloXroute(Buffer.from(serialized)).catch(() => {});
     const sig = await connection.sendRawTransaction(serialized, { skipPreflight: true, maxRetries: 2 });
-    logger.info(`PumpSwap sell via direct RPC${useBx ? ' + bloXroute' : ''}: ${sig}`);
+    logger.info(`PumpSwap sell via direct RPC${useBx ? ' + bloXroute[tip]' : ''}: ${sig}`);
     return sig;
   }
 

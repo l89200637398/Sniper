@@ -1,8 +1,14 @@
 import { Sniper } from './core/sniper';
 import { TelegramBot } from './bot/bot';
 import { logger } from './utils/logger';
+import { startMetricsServer, stopMetricsServer } from './utils/metrics';
+import { config } from './config';
 
 console.log('🚀 index.ts started');
+
+if (config.metrics.enabled) {
+  startMetricsServer(config.metrics.port);
+}
 
 const sniper = new Sniper();
 const bot = new TelegramBot(sniper);
@@ -44,6 +50,7 @@ async function shutdown(signal: string): Promise<void> {
     logger.error('Shutdown error or timeout:', err);
   }
 
+  stopMetricsServer();
   process.exit(0);
 }
 
