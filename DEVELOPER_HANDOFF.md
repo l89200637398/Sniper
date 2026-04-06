@@ -1,7 +1,7 @@
 # Developer Handoff — Solana Sniper Bot v3
 
 > Подробный комментарий для разработчика, который подхватит проект.
-> Дата: 2026-03-31
+> Дата: 2026-04-06
 
 ---
 
@@ -23,17 +23,39 @@
 - **Jito bundles**: работает, dynamic tips из getTipFloor, retry с escalation
 - **Token scoring**: работает, 0-100 баллов
 - **Safety checks**: работает (mint authority, freeze authority, rugcheck API)
-- **Copy-trade (CT-2)**: включён в конфиге, но требует тестирования в production
+- **Copy-trade (2-tier)**: T1: WR≥60%/15+ trades → 0.08 SOL; T2: WR≥50%/8+ trades → 0.04 SOL; maxPositions=3
 - **Telegram бот**: работает, все команды
 - **Console control**: `scripts/control.ts` — запуск/остановка без Telegram
 - **Trade logging**: JSONL логи (events + trades)
 - **Graceful shutdown**: SIGINT/SIGTERM, 30s timeout
 
+### Новые подсистемы (апрель 2026)
+
+- **Runner-tail**: после +100% PnL (pump.fun) / +200% (PumpSwap) расширяются trailing и hard stop. Цель — ловить монстр-ранеры ×5-×10
+- **Defensive auto-throttle**: rolling WR < 40% → minTokenScore+5, entry×0.70 (hysteresis: выход при WR > 50%)
+- **bloXroute fallback**: параллельная отправка sell через bloXroute BDN на финальной попытке, gated по % от proceeds
+- **Jupiter fallback**: Jupiter Metis V6 aggregator как последнее средство sell (RPC-only)
+- **Prometheus metrics**: endpoint на порту 9469 (/metrics, /snapshot)
+- **Persisted createSlots**: createSlotForMint сохраняется на диск для точного age tracking
+
+### Brainstorm v4 (апрель 2026)
+
+- **Dynamic slippage**: `computeDynamicSlippage()` в `config.ts` — формула `sqrt(entry/liquidity) × maxBps`, min 300 bps. Снижает переплату на 3-5% при мелких входах
+- **Batch RPC**: `checkPositions()` использует `getMultipleAccountsInfo()` вместо N sequential `getAccountInfo()` — 1 RPC call для всех позиций
+- **Adaptive sell polling**: confirmation проверяется каждые 100ms (вместо fixed 500ms), maxWait Jito=600ms / directRpc=400ms
+- **Priority fee escalation**: sell retry ×1.5 priority fee на каждом attempt (cap 5×), не только Jito tip
+- **feeRecipient cache**: 5s TTL, исключает RPC вызов из sell retry loop
+- **2-tier copy-trade**: T1 (WR≥60%, 15+ trades, 0.08 SOL), T2 (WR≥50%, 8+ trades, 0.04 SOL). Loss streak filter (T1: 5+, T2: 3+)
+- **Holder concentration**: `getTokenLargestAccounts()` при entry scoring — top holder >50% = -25pts, >30% = -10pts
+- **Aggregated buy-volume gate**: 2+ independent wallets с суммарно ≥0.5 SOL = fast entry
+- **Jupiter pre-warm**: спекулятивно кешируем quote (5s TTL) для позиций с PnL>50% или age>30s
+- **minTokenAgeMs**: 150→400ms — пропускаем bundled dev-buys, фильтруем same-block rugs
+
 ### Что в процессе
 
 - Полное тестирование в реальном режиме (не SIMULATE)
 - Оптимизация exit-параметров на основе реальных данных
-- Мониторинг P&L
+- Мониторинг P&L через metrics endpoint
 
 ---
 
@@ -68,17 +90,18 @@
 ## 3. TODO (что делать дальше)
 
 ### Высокий приоритет
-- [ ] Полноценное тестирование в production с малыми суммами (0.01-0.02 SOL)
-- [ ] Мониторинг P&L: анализ trades.jsonl, оптимизация exit-параметров
+- [ ] Полноценное тестирование в production с entry 0.15 SOL
+- [ ] Мониторинг P&L: анализ trades.jsonl + metrics endpoint (порт 9469)
 - [ ] LaunchLab: исправить PDA seeds для pool discovery
-- [ ] Добавить алерты при ошибках (в Telegram или отдельный канал)
+- [ ] Валидация runner-tail и defensive mode на реальных данных
 
 ### Средний приоритет
-- [ ] Dashboard/метрики: win rate, avg PnL, exposure, trades/hour
-- [ ] Оптимизация Jito tips на основе реальных данных (сейчас conservative)
+- [x] Dashboard/метрики: Prometheus endpoint реализован (win rate, sell paths, exposure)
+- [x] Оптимизация Jito tips: tip 0.00003, max 0.0001, urgentMaxTipImmediate
 - [ ] Token-2022 тестирование для CPMM
 - [ ] Расширить rugcheck: больше источников, кэширование
 - [ ] Рассмотреть WebSocket fallback при потере gRPC соединения
+- [ ] Kelly criterion auto-sizing для entry (пока не реализован)
 
 ### Низкий приоритет
 - [ ] Web UI для мониторинга (вместо только Telegram)
@@ -90,13 +113,16 @@
 
 ## 4. Критические файлы
 
-### `src/core/sniper.ts` (~2500+ строк)
+### `src/core/sniper.ts` (~4300+ строк)
 **Самый важный файл**. Содержит:
 - Всю логику entry для всех протоколов
 - Confirm flow (проверка статуса Jito bundles)
 - Exit signal detection и sell triggering
 - Position lifecycle management
 - Copy-trade логику
+- Defensive auto-throttle (getEffectiveMinScore, getEffectiveEntry)
+- bloXroute/Jupiter fallback sell paths
+- Metrics counters (sell paths, wins/losses)
 
 **Осторожно**: Файл большой и сложный. Изменения в нём влияют на всю торговую логику. При изменениях тщательно тестировать в SIMULATE mode.
 

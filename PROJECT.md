@@ -57,6 +57,9 @@ Sell (Jito bundle) ---> Trade log (JSONL)
 | TokenScorer | `src/utils/token-scorer.ts` | Скоринг токенов (0-100) |
 | WalletTracker | `src/core/wallet-tracker.ts` | Copy-trading система |
 | TelegramBot | `src/bot/bot.ts` | Telegram интерфейс |
+| BloXroute | `src/infra/bloxroute.ts` | Параллельная отправка sell через bloXroute BDN |
+| JupiterSell | `src/trading/jupiter-sell.ts` | Jupiter Metis V6 fallback sell (RPC-only) |
+| Metrics | `src/utils/metrics.ts` | Prometheus-совместимый endpoint (/metrics) |
 
 ### Структура каталогов
 
@@ -65,13 +68,13 @@ src/
   index.ts                 # Entry point
   config.ts                # Все параметры конфигурации
   constants.ts             # Program IDs, discriminators, on-chain layouts
-  core/                    # Ядро бота (sniper, position, detector, sell-engine)
-  trading/                 # Построители транзакций по протоколам
+  core/                    # Ядро бота (sniper, position, detector, sell-engine, wallet-tracker)
+  trading/                 # Построители транзакций по протоколам (+ jupiter-sell.ts)
   geyser/                  # gRPC клиент
   jito/                    # Jito bundle sending
-  infra/                   # RPC, blockhash cache, priority fees
+  infra/                   # RPC, blockhash cache, priority fees, bloxroute
   bot/                     # Telegram бот
-  utils/                   # Logger, retry, scoring, safety, social
+  utils/                   # Logger, retry, scoring, safety, social, metrics
 scripts/
   verify.ts                # Проверка on-chain layouts (prestart hook)
   test-trade.ts            # Ручное тестирование сделок
@@ -201,32 +204,42 @@ npx ts-node scripts/control.ts
 
 Каждая позиция проверяется на следующие сигналы выхода (в порядке приоритета):
 
-1. **Hard Stop** — безусловный выход при падении > hardStopPercent
-2. **Entry Stop-Loss** — выход если PnL < -entryStopLossPercent вскоре после входа
+1. **Entry Stop-Loss** — выход если PnL < -entryStopLossPercent вскоре после входа
+2. **Hard Stop** — безусловный выход при падении > hardStopPercent от пика
 3. **Velocity Drop** — резкое падение скорости роста цены
-4. **Trailing Stop** — активируется при росте > trailingActivationPercent, закрывает при откате > trailingDrawdownPercent
-5. **Slow Drawdown** — медленное снижение в течение slowDrawdownMinDurationMs
-6. **Stagnation** — цена не двигается > stagnationMinMove за stagnationWindowMs
-7. **Time Stop** — принудительный выход после timeStopAfterMs если PnL < timeStopMinPnl
-8. **Break-Even** — выход в ноль после срабатывания trailing stop
-9. **Take-Profit** — частичные продажи по уровням (tiered)
+4. **Time Stop** — принудительный выход после timeStopAfterMs если PnL < timeStopMinPnl
+5. **Stagnation** — цена не двигается > stagnationMinMove за stagnationWindowMs
+6. **Take-Profit** — частичные продажи по уровням (tiered)
+7. **Break-Even** — выход в ноль после срабатывания trailing stop (отключён в runner mode)
+8. **Trailing Stop** — активируется при росте > trailingActivationPercent, закрывает при откате > trailingDrawdownPercent
+9. **Slow Drawdown** — медленное снижение в течение slowDrawdownMinDurationMs
+10. **Runner Tail** — после +100% PnL (pump.fun) / +200% (PumpSwap) расширяется trailing (9%→40%) и hard stop (40%→65%), break-even отключается. Цель — дать монстр-ранерам дойти до ×5-×10
 
 ### Token scoring (0-100)
 
 Факторы оценки:
-- Количество недавних токенов от создателя (>3 = снижение)
-- Social signals (Twitter/Telegram упоминания)
-- Rugcheck API проверка
-- Safety checks (mint authority, freeze authority)
-- Ликвидность (минимальный порог)
+- **Social** (max 25 pts): Twitter/Telegram упоминания (score ≥2 = +25, ≥1 = +15)
+- **Market validation** (max 25 pts): independent buyers (+10/+8), first buy ≥0.1 SOL (+7)
+- **Creator quality** (max 15 / penalty -20): recent tokens <3 = OK, ≥3 = SPAM (-20)
+- **Metadata** (max 5 pts): size ≥500B (+5), <200B (-10)
+- **Safety** (penalties): rugcheck low (+10), high (-50), mint auth (-40), freeze (-30)
+- **Holder concentration** (brainstorm v4): top holder >50% (-25), >30% (-10), <15% (+5)
+- **Mayhem bypass**: mayhem токены получают минимум minScore
+
+**Entry multiplier** на основе score:
+- ≥70 pts: ×2.0 (high confidence)
+- ≥50 pts: ×1.0 (normal)
+- ≥minScore: ×0.5 (low confidence → half entry)
 
 ### Jito MEV bundles
 
-- Base tip: 0.000012 SOL
-- Увеличение при retry: x1.2 за каждую попытку
-- Max tip: 0.00005 SOL
-- Max retries: 2
+- Base tip: 0.00003 SOL
+- Увеличение при retry: ×1.5 за каждую попытку
+- Max tip: 0.0001 SOL
+- Min tip: 0.000015 SOL
+- Max retries: 3
 - Dynamic tip из getTipFloor percentiles
+- Urgent sell: сразу maxTip без ramp-up
 
 ---
 
@@ -236,57 +249,131 @@ npx ts-node scripts/control.ts
 
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| maxPositions | 3 | Максимум одновременных позиций (все протоколы) |
-| maxPumpFunPositions | 2 | Максимум позиций Pump.fun |
+| maxPositions | 4 | Максимум одновременных позиций (все протоколы) |
+| maxPumpFunPositions | 3 | Максимум позиций Pump.fun |
 | maxPumpSwapPositions | 1 | Максимум позиций PumpSwap |
 | maxRaydiumLaunchPositions | 1 | Максимум позиций LaunchLab |
 | maxRaydiumCpmmPositions | 1 | Максимум позиций CPMM |
 | maxRaydiumAmmV4Positions | 1 | Максимум позиций AMM v4 |
-| maxTotalExposureSol | 0.25 | Максимальная общая сумма во всех позициях |
+| maxTotalExposureSol | 0.60 | Максимальная общая сумма во всех позициях |
 
 ### Entry
 
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| entryAmountSol | 0.05 | Сумма входа по умолчанию |
-| minEntryAmountSol | 0.005 | Минимальная сумма входа |
-| minIndependentBuySol | 0.15 | Мин. сумма independent buyer для подтверждения |
+| entryAmountSol | 0.15 | Сумма входа по умолчанию (pump.fun, PumpSwap) |
+| minEntryAmountSol | 0.05 | Минимальная сумма входа |
+| minIndependentBuySol | 0.25 | Мин. сумма independent buyer для подтверждения |
 | waitForBuyerTimeoutMs | 3000 | Время ожидания independent buyer |
+| earlyExitTimeoutMs | 1500 | Быстрый выход (socialLow: 1000ms автоматически) |
 | maxTokenAgeMs | 20000 | Максимальный возраст токена для входа |
-| minTokenAgeMs | 150 | Минимальный возраст (защита от same-block rugs) |
-| minTokenScore | 25 | Минимальный score для входа |
+| minTokenAgeMs | 400 | Минимальный возраст (пропускаем bundled dev-buys) |
+| minTokenScore | 50 | Минимальный score для входа |
+| dynamicSlippage | auto | `sqrt(entry/liquidity) × maxBps`, min 300 bps |
+| aggBuyVolumeGate | 0.5 SOL | 2+ independent wallets = fast entry |
 
 ### Jito
 
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| tipAmountSol | 0.000012 | Базовый tip |
-| maxTipAmountSol | 0.00005 | Максимальный tip |
-| minTipAmountSol | 0.000008 | Минимальный tip |
-| maxRetries | 2 | Максимум ретраев |
-| tipIncreaseFactor | 1.2 | Множитель при retry |
+| tipAmountSol | 0.00003 | Базовый tip |
+| maxTipAmountSol | 0.0001 | Максимальный tip |
+| minTipAmountSol | 0.000015 | Минимальный tip |
+| maxRetries | 3 | Максимум ретраев (быстрее до maxTip) |
+| tipIncreaseFactor | 1.5 | Множитель tip при retry |
+| urgentMaxTipImmediate | true | Dump-сигнал сразу идёт с maxTip |
 
-### Exit (по протоколам)
-
-Каждый протокол имеет свои exit-параметры. Пример для Pump.fun:
+### Sell Pipeline (brainstorm v4)
 
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| entryStopLossPercent | 25 | Stop-loss при входе |
+| Confirmation polling | 100ms | Adaptive polling вместо fixed 500ms |
+| Max wait (Jito) | 600ms | Ожидание confirmation для Jito attempt |
+| Max wait (directRpc) | 400ms | Ожидание confirmation для RPC retry |
+| Priority fee escalation | ×1.5/retry | Priority fee растёт на каждом retry, cap 5× |
+| feeRecipient cache | 5s TTL | Кешируем Global PDA, не дёргаем RPC в retry loop |
+| Jupiter pre-warm | 5s TTL | Quote кешируется для позиций с PnL > 50% или age > 30s |
+
+### Exit (по протоколам)
+
+#### Pump.fun exit
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| entryStopLossPercent | 20 | Stop-loss при входе |
 | hardStopPercent | 40 | Безусловный стоп |
 | trailingActivationPercent | 25 | Активация trailing stop |
-| trailingDrawdownPercent | 12 | Откат для trailing stop |
-| timeStopAfterMs | 90000 | Время до принудительного выхода |
-| takeProfit | 4 уровня | 8%/20%/50%/150% |
+| trailingDrawdownPercent | 9 | Откат для trailing stop |
+| timeStopAfterMs | 60000 | Время до принудительного выхода |
+| takeProfit | 12%→15%, 30%→15%, 80%→40%, 200%→30% | 4 уровня (portion) |
+| runnerActivationPercent | 100 | Активация runner-tail |
+| runnerTrailDrawdownPercent | 40 | Расширенный trailing в runner |
+| runnerHardStopPercent | 65 | Расширенный hard stop в runner |
 
-### Copy-Trade
+#### PumpSwap exit
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| entryStopLossPercent | 20 | Stop-loss |
+| hardStopPercent | 48 | Безусловный стоп |
+| trailingActivationPercent | 35 | Trailing активация |
+| trailingDrawdownPercent | 18 | Trailing откат |
+| timeStopAfterMs | 420000 | 7 мин до выхода |
+| takeProfit | 25%→20%, 80%→25%, 250%→30%, 700%→25% | 4 уровня |
+| runnerActivationPercent | 200 | Runner-tail activation |
+
+#### Raydium (LaunchLab / CPMM / AMM v4)
+
+Аналогичные параметры; подробности в `src/config.ts`.
+
+### Copy-Trade (2-tier, brainstorm v4)
 
 | Параметр | Значение | Описание |
 |----------|----------|----------|
 | enabled | true | CT-2 активирован |
-| entryAmountSol | 0.03 | Консервативный вход |
-| maxPositions | 1 | Макс позиций copy-trade |
-| minBuySolFromTracked | 0.15 | Мин. сумма покупки от tracked wallet |
+| entryAmountSol | 0.08 | Tier 1 вход (WR≥60%, ≥15 trades) |
+| tier2EntryAmountSol | 0.04 | Tier 2 вход (WR≥50%, ≥8 trades) |
+| maxPositions | 3 | Макс позиций copy-trade |
+| minBuySolFromTracked | 0.25 | Мин. сумма покупки от tracked wallet |
+| slippageBps | 2000 | Slippage для copy-trade сделок |
+
+**Wallet Tracker:**
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| minCompletedTrades | 15 | Tier 1: минимум завершённых сделок |
+| minWinRate | 0.60 | Tier 1: минимум win rate |
+| tier2MinCompletedTrades | 8 | Tier 2: минимум завершённых сделок |
+| tier2MinWinRate | 0.50 | Tier 2: минимум win rate |
+| maxTrackedWallets | 2000 | Максимум отслеживаемых кошельков |
+| Loss streak filter | T1: 5+, T2: 3+ | Пропускаем кошельки с серией лоссов |
+
+### Defensive Mode (soft throttle)
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| enabled | true | Промежуточный уровень между нормой и kill-switch |
+| window | 10 | Минимум N сделок для оценки |
+| entryThreshold | 0.40 | WR < 40% — включить defensive |
+| exitThreshold | 0.50 | WR > 50% — выключить |
+| scoreDelta | 5 | minTokenScore += 5 в defensive |
+| entryMultiplier | 0.70 | entry × 0.70 в defensive |
+
+### bloXroute (последнее средство при sell)
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| enabled | auto (.env) | Активируется при наличии BLOXROUTE_AUTH_HEADER + TIP_WALLET |
+| tipLamports | 1000000 | 0.001 SOL tip внутри tx |
+| minAttemptIdx | 3 | Только на финальной попытке sell |
+| maxTipPctOfProceeds | 0.05 | Не включать если tip > 5% от выхода |
+
+### Metrics
+
+| Параметр | Значение | Описание |
+|----------|----------|----------|
+| enabled | true | Prometheus-совместимый endpoint |
+| port | 9469 | GET /metrics, GET /snapshot |
 
 ---
 
