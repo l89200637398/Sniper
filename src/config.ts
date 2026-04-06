@@ -107,10 +107,24 @@ export const config = {
     // minTrades = 20 (было 5) — нужна история.
     copyTrade: {
       enabled:              true,    // было false → CT-2 активируем
-      entryAmountSol:       0.03,    // консервативный вход
-      maxPositions:         1,       // не разгоняемся
-      minBuySolFromTracked: 0.15,    // было 0.10 — только значимые входы
+      entryAmountSol:       0.08,    // было 0.03 → масштабируем (proven-edge канал)
+      maxPositions:         3,       // 1→3 (15 SOL/нед P2): eligible кошельки имеют WR>65%
+      minBuySolFromTracked: 0.25,    // было 0.15 — только значимые входы
       slippageBps:          2000,
+    },
+
+    // ── Defensive mode (soft throttle, 15 SOL/нед патч P2) ──────────────────
+    // Промежуточный уровень между нормальной работой и kill-switch'ом (<25% WR).
+    // Активируется если rolling WR за последние N сделок ниже entryThreshold;
+    // эффект: minTokenScore +scoreDelta, entry*entryMultiplier. Не паузит, просто
+    // усиливает фильтры. Отключается при exitThreshold.
+    defensive: {
+      enabled:          true,
+      window:           10,    // минимум N сделок для оценки
+      entryThreshold:   0.40,  // WR < 40% → включить defensive
+      exitThreshold:    0.50,  // WR > 50% → выключить
+      scoreDelta:       5,     // minTokenScore += 5
+      entryMultiplier:  0.70,  // entry × 0.70
     },
 
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
@@ -133,6 +147,14 @@ export const config = {
         timeStopAfterMs:           60_000,   // 90k→60k: быстрее освобождаем слоты (15 SOL/нед патч)
         timeStopMinPnl:               -0.05,
         breakEvenAfterTrailingPercent: -1.5,
+        // ── Runner tail (15 SOL/нед патч P2) ──────────────────────────────
+        // После достижения +runnerActivationPercent позиция переходит в режим
+        // "монстр-ранера": расширяется trailing drawdown и hard stop, break-even
+        // чек отключается. Цель — дать ×5..×10 токенам добежать, они дают основной
+        // вклад в EV при низком среднем winrate.
+        runnerActivationPercent:       100,
+        runnerTrailDrawdownPercent:    40,
+        runnerHardStopPercent:         65,
         // Перебалансированный TP ladder (15 SOL/нед патч):
         // Раньше 8%/0.20 срезал winners слишком рано; теперь больший вес на mid-run (80%).
         takeProfit: [
@@ -165,11 +187,19 @@ export const config = {
         timeStopAfterMs:           420_000,
         timeStopMinPnl:               -0.08,
         breakEvenAfterTrailingPercent: -1.5, // было -3
+        // Runner tail для PumpSwap (миграции с bonding curve, потенциал большой).
+        runnerActivationPercent:       200,
+        runnerTrailDrawdownPercent:    45,
+        runnerHardStopPercent:         70,
+        // Перебалансированный TP ladder PumpSwap: более ранний захват mid-run.
+        // Было 50/200/600/1500 × 25%. Даже "средние" миграции редко доходят до 600%+.
+        // Новая лестница: вес сдвинут на 25%/80% (стабильно достижимо) с runner-tail
+        // ловящим остаток позиции на +500%+.
         takeProfit: [
-          { levelPercent:   50, portion: 0.25 },
-          { levelPercent:  200, portion: 0.25 },
-          { levelPercent:  600, portion: 0.25 },
-          { levelPercent: 1500, portion: 0.25 },
+          { levelPercent:   25, portion: 0.20 },
+          { levelPercent:   80, portion: 0.25 },
+          { levelPercent:  250, portion: 0.30 },
+          { levelPercent:  700, portion: 0.25 },
         ],
       },
     },
