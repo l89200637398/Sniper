@@ -24,7 +24,8 @@ build/
 Thumbs.db
 
 # Logs
-logs/
+logs/*
+!logs/.gitkeep
 pool.log
 pools.log
 
