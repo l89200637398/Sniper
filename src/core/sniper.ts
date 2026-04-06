@@ -118,6 +118,10 @@ export class Sniper {
 
   private consecutiveLosses = 0;
   private pauseUntil: number = 0;
+  // Soft throttle (15 SOL/нед P2): промежуточный режим между нормой и kill-switch.
+  // Включается при rolling WR < defensive.entryThreshold и усиливает фильтры,
+  // но не паузит бот. Выключается при WR > defensive.exitThreshold.
+  private defensiveMode: boolean = false;
 
   // ── Execution quality kill-switch (per Доп_к_ТЗ_и_рекомендациям) ────────────
   // Если растёт доля Invalid или падает fill-rate → снижаем активность / паузируем.
@@ -1908,7 +1912,7 @@ export class Sniper {
     try {
       const mintPubkey       = new PublicKey(token.mint);
       const cfg              = isMayhemPos ? config.strategy.mayhem : getStrategyForProtocol('pump.fun');
-      const effectiveEntry   = overrideEntryAmountSol ?? cfg.entryAmountSol;
+      const effectiveEntry   = this.getEffectiveEntry(overrideEntryAmountSol ?? cfg.entryAmountSol);
       const decimals         = 6;
       const amountInLamports = BigInt(Math.floor(effectiveEntry * 1e9));
       const expectedTokens   = Number((amountInLamports * virtualTokenReserves) / virtualSolReserves) / Math.pow(10, decimals);
@@ -2060,7 +2064,7 @@ export class Sniper {
                       hasFreezeAuthority: rugResult?.hasFreezeAuthority ?? false,
                       isMayhem: getMintState(position.mint).isMayhemMode ?? false,
                     };
-                    const scoringResult = scoreToken(features, config.strategy.minTokenScore);
+                    const scoringResult = scoreToken(features, this.getEffectiveMinScore());
                     logEvent('POSITION_CONFIRMED_SCORE', {
                       mint: token.mint,
                       score: scoringResult.score,
@@ -3706,10 +3710,11 @@ export class Sniper {
           hasFreezeAuthority: rugResult?.hasFreezeAuthority ?? false,
           isMayhem: getMintState(mintPk).isMayhemMode ?? false,
         };
-        const scoringResult = scoreToken(features, config.strategy.minTokenScore);
+        const effMinScore = this.getEffectiveMinScore();
+        const scoringResult = scoreToken(features, effMinScore);
         logEvent('ADDON_SCORE', { mint: mintStr, score: scoringResult.score, enter: scoringResult.shouldEnter, reasons: scoringResult.reasons });
         if (!scoringResult.shouldEnter) {
-          logger.info(`📊 Add-on blocked: score=${scoringResult.score} < ${config.strategy.minTokenScore} for ${mintStr.slice(0,8)} — ${scoringResult.reasons.join(' ')}`);
+          logger.info(`📊 Add-on blocked: score=${scoringResult.score} < ${effMinScore} for ${mintStr.slice(0,8)} — ${scoringResult.reasons.join(' ')}`);
           return;
         }
       }
@@ -4213,10 +4218,41 @@ export class Sniper {
     if (this.recentTradeWins.length > this.TRADE_QUALITY_WINDOW) {
       this.recentTradeWins.shift();
     }
+    const winRate = this.recentTradeWins.filter(v => v).length / this.recentTradeWins.length;
     logEvent('TRADE_QUALITY', {
-      winRate: this.recentTradeWins.filter(v => v).length / this.recentTradeWins.length,
+      winRate,
       window: this.recentTradeWins.length,
       recentWins: this.recentTradeWins.filter(v => v).length,
     });
+    this.recalcDefensiveMode(winRate);
+  }
+
+  private recalcDefensiveMode(winRate: number): void {
+    const dCfg = (config.strategy as any).defensive;
+    if (!dCfg?.enabled) return;
+    if (this.recentTradeWins.length < dCfg.window) return;
+    const wasDefensive = this.defensiveMode;
+    if (!wasDefensive && winRate < dCfg.entryThreshold) {
+      this.defensiveMode = true;
+      logger.warn(`🛡 Defensive mode ON: WR=${(winRate*100).toFixed(0)}% over last ${this.recentTradeWins.length} — filters tightened`);
+      logEvent('DEFENSIVE_MODE_ON', { winRate, window: this.recentTradeWins.length });
+      metrics.set('defensive_mode', 1);
+    } else if (wasDefensive && winRate > dCfg.exitThreshold) {
+      this.defensiveMode = false;
+      logger.info(`✅ Defensive mode OFF: WR=${(winRate*100).toFixed(0)}% recovered`);
+      logEvent('DEFENSIVE_MODE_OFF', { winRate, window: this.recentTradeWins.length });
+      metrics.set('defensive_mode', 0);
+    }
+  }
+
+  private getEffectiveMinScore(): number {
+    const dCfg = (config.strategy as any).defensive;
+    const base = config.strategy.minTokenScore;
+    return this.defensiveMode && dCfg?.enabled ? base + (dCfg.scoreDelta ?? 0) : base;
+  }
+
+  private getEffectiveEntry(baseEntry: number): number {
+    const dCfg = (config.strategy as any).defensive;
+    return this.defensiveMode && dCfg?.enabled ? baseEntry * (dCfg.entryMultiplier ?? 1) : baseEntry;
   }
 }

@@ -54,6 +54,7 @@ export class Position {
   public lastTimestamp: number;
   public drawdownStart: number | null;
   public trailingActivated: boolean;
+  public runnerTailActivated: boolean = false;
 
   private takeProfitLevels: TakeProfitLevel[];
   private takenLevels: Set<number>;
@@ -142,6 +143,15 @@ export class Position {
       this.trailingActivated = true;
     }
 
+    // Runner tail: после +runnerActivationPercent позиция переходит в режим
+    // монстр-ранера (расширенный trailing + hard stop, без break-even).
+    const exitCfgForRunner = this.getExitConfig() as any;
+    const runnerActPct = exitCfgForRunner.runnerActivationPercent;
+    if (!this.runnerTailActivated && typeof runnerActPct === 'number' &&
+        newPrice >= this.entryPrice * (1 + runnerActPct / 100)) {
+      this.runnerTailActivated = true;
+    }
+
     if (newPrice < this.maxPrice) {
       if (this.drawdownStart === null) this.drawdownStart = now;
     } else {
@@ -165,7 +175,13 @@ export class Position {
 
   shouldSell(logger: any = globalLogger): SellDecision {
     const now = Date.now();
-    const exit = this.getExitConfig();
+    const exitRaw = this.getExitConfig() as any;
+    // Runner tail overrides: расширенные пороги для монстр-ранеров.
+    const effHardStopPercent = this.runnerTailActivated && typeof exitRaw.runnerHardStopPercent === 'number'
+      ? exitRaw.runnerHardStopPercent : exitRaw.hardStopPercent;
+    const effTrailingDrawdownPercent = this.runnerTailActivated && typeof exitRaw.runnerTrailDrawdownPercent === 'number'
+      ? exitRaw.runnerTrailDrawdownPercent : exitRaw.trailingDrawdownPercent;
+    const exit = exitRaw;
     const age = now - this.openedAt;
     const mintStr = this.mint.toBase58().slice(0,8);
 
@@ -186,9 +202,9 @@ export class Position {
       return { action: 'full', reason: 'stop_loss', urgent: true };
     }
 
-    // 2. Hard stop
+    // 2. Hard stop (с runner override)
     const drawdown = (this.maxPrice - this.currentPrice) / this.maxPrice;
-    if (drawdown >= exit.hardStopPercent / 100) {
+    if (drawdown >= effHardStopPercent / 100) {
       logger.debug(`[${mintStr}] hard_stop: drawdown=${drawdown}, max=${this.maxPrice}, current=${this.currentPrice}`);
       logEvent('SHOULD_SELL_TRIGGER', {
         mint: mintStr,
@@ -322,8 +338,8 @@ export class Position {
       }
     }
 
-    // 7. Break-even stop (только после трейлинга)
-    if (this.trailingActivated) {
+    // 7. Break-even stop (только после трейлинга; отключён в runner tail режиме)
+    if (this.trailingActivated && !this.runnerTailActivated) {
       const pnl = (this.currentPrice - this.entryPrice) / this.entryPrice;
       if (pnl <= exit.breakEvenAfterTrailingPercent / 100) {
         logEvent('SHOULD_SELL_TRIGGER', {
@@ -344,7 +360,7 @@ export class Position {
       if (this.drawdownStart !== null) {
         const dropDuration = now - this.drawdownStart;
         if (dropDuration <= exit.slowDrawdownMinDurationMs) {
-          if (drawdown >= exit.trailingDrawdownPercent / 100) {
+          if (drawdown >= effTrailingDrawdownPercent / 100) {
             logEvent('SHOULD_SELL_TRIGGER', {
               mint: mintStr,
               reason: 'trailing_stop',
@@ -470,6 +486,7 @@ export class Position {
       lastTimestamp: this.lastTimestamp,
       drawdownStart: this.drawdownStart,
       trailingActivated: this.trailingActivated,
+      runnerTailActivated: this.runnerTailActivated,
       takenLevels: Array.from(this.takenLevels),
       takenLevelsCount: this.takenLevelsCount,
       openedAt: this.openedAt,
@@ -505,6 +522,7 @@ export class Position {
     pos.lastTimestamp = data.lastTimestamp;
     pos.drawdownStart = data.drawdownStart;
     pos.trailingActivated = data.trailingActivated;
+    pos.runnerTailActivated = data.runnerTailActivated ?? false;
     pos.takenLevels = new Set(data.takenLevels);
     pos.takenLevelsCount = data.takenLevelsCount;
     pos.priceHistory = data.priceHistory;
