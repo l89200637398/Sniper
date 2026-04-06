@@ -3235,7 +3235,7 @@ export class Sniper {
   }
 
   private startMonitoring() {
-    if (this.monitoringInterval) clearInterval(this.monitoringInterval);
+    if (this.monitoringInterval) clearTimeout(this.monitoringInterval);
     // 600ms base + random jitter 0-200ms = 600-800ms effective.
     // Stagger внутри checkPositions (50ms между позициями) снижает RPC burst.
     // При 4 позициях: 4 × getAccountInfo за 600-800ms = ~5-6 req/s вместо 10 req/s.
@@ -3352,6 +3352,7 @@ export class Sniper {
             this.emitTradeClose(position, mintStr, '', decision.reason ?? 'ata_empty', decision.urgent ?? false, 0, closedAt);
             this.totalTrades++;
             this.consecutiveLosses++;
+            this.recordTradeResult(false); // FIX: ATA empty = loss для defensive mode
             this.positions.delete(mintStr);
             this.copyTradeMints.delete(mintStr);
             this.sellFailureCount.delete(mintStr);
@@ -3386,6 +3387,7 @@ export class Sniper {
         this.emitTradeClose(position, mintStr, '', (decision.reason ?? 'rpc_error') as CloseReason, decision.urgent ?? false, 0, closedAt);
         this.totalTrades++;
         this.consecutiveLosses++;
+        this.recordTradeResult(false); // FIX: ATA failed = loss для defensive mode
         this.positions.delete(mintStr);
         this.copyTradeMints.delete(mintStr);
         this.sellFailureCount.delete(mintStr);
@@ -3583,6 +3585,7 @@ export class Sniper {
         this.emitTradeClose(position, mintStr, lastTxId, (decision.reason ?? 'rpc_error') as CloseReason, decision.urgent ?? false, 0, closedAt);
         this.totalTrades++;
         this.consecutiveLosses++;
+        this.recordTradeResult(false); // FIX: force-close = loss, defensive mode должен это видеть
         if (config.strategy.consecutiveLossesMax && this.consecutiveLosses >= config.strategy.consecutiveLossesMax) {
           logger.warn(`❗ ${this.consecutiveLosses} consecutive losses, pausing buys for ${config.strategy.pauseAfterLossesMs / 60000} min`);
           this.pauseUntil = Date.now() + config.strategy.pauseAfterLossesMs;

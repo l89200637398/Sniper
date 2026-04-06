@@ -256,7 +256,7 @@ npx ts-node scripts/control.ts
 | minEntryAmountSol | 0.05 | Минимальная сумма входа |
 | minIndependentBuySol | 0.25 | Мин. сумма independent buyer для подтверждения |
 | waitForBuyerTimeoutMs | 3000 | Время ожидания independent buyer |
-| earlyExitTimeoutMs | 2000 | Быстрый выход при слабых токенах |
+| earlyExitTimeoutMs | 1500 | Быстрый выход (socialLow: 1000ms автоматически) |
 | maxTokenAgeMs | 20000 | Максимальный возраст токена для входа |
 | minTokenAgeMs | 150 | Минимальный возраст (защита от same-block rugs) |
 | minTokenScore | 50 | Минимальный score для входа |
@@ -268,8 +268,8 @@ npx ts-node scripts/control.ts
 | tipAmountSol | 0.00003 | Базовый tip |
 | maxTipAmountSol | 0.0001 | Максимальный tip |
 | minTipAmountSol | 0.000015 | Минимальный tip |
-| maxRetries | 5 | Максимум ретраев |
-| tipIncreaseFactor | 1.3 | Множитель при retry |
+| maxRetries | 3 | Максимум ретраев (быстрее до maxTip) |
+| tipIncreaseFactor | 1.5 | Множитель при retry |
 | urgentMaxTipImmediate | true | Dump-сигнал сразу идёт с maxTip |
 
 ### Exit (по протоколам)

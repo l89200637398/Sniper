@@ -30,7 +30,7 @@
 
 Порядок попыток sell (до 4 итераций):
 
-1. **Jito bundle** (attempt 0-4): tip escalation 0.00003→0.0001 SOL
+1. **Jito bundle** (attempt 0-2): tip escalation 0.00003→0.0001 SOL (×1.5 per retry)
 2. **Direct RPC** (attempt 1+): параллельно с Jito
 3. **bloXroute** (attempt 3, финальная): только если tip ≤ 5% от proceeds
 4. **Jupiter** (last resort): Metis V6 aggregator, RPC-only
