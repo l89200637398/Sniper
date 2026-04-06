@@ -7,6 +7,25 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/**
+ * Dynamic slippage: reduces slippage when entry is small relative to liquidity.
+ * formula: max(minFloorBps, maxSlippageBps × sqrt(entryAmountSol / liquiditySol))
+ * e.g. 0.15 SOL entry / 2 SOL liquidity → sqrt(0.075) ≈ 0.27 → 2500 × 0.27 = 688 bps
+ * Falls back to maxSlippageBps when liquidity data unavailable.
+ */
+export function computeDynamicSlippage(
+  entryAmountSol: number,
+  liquiditySol: number,
+  maxSlippageBps: number,
+  minFloorBps: number = 300,
+): number {
+  if (liquiditySol <= 0 || entryAmountSol <= 0) return maxSlippageBps;
+  const ratio = entryAmountSol / liquiditySol;
+  if (ratio >= 1) return maxSlippageBps;
+  const dynamic = Math.ceil(maxSlippageBps * Math.sqrt(ratio));
+  return Math.max(minFloorBps, Math.min(dynamic, maxSlippageBps));
+}
+
 export const config = {
   telegram: { botToken: requireEnv('BOT_TOKEN') },
   wallet: {
@@ -68,7 +87,7 @@ export const config = {
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
-    minTokenAgeMs:        150,       // было 50 → меньше same-block rugs
+    minTokenAgeMs:        400,       // 150→400: пропускаем bundled dev-buys, фильтруем same-block rugs
     disallowToken2022:    false,
 
     // ── Сетевые/Jito пороги ──────────────────────────────────────────────────
@@ -101,15 +120,16 @@ export const config = {
     minTokenScore:     50,           // 40→50: только A/A+ setups (15 SOL/нед патч)
     enableRugcheck:    true,
 
-    // ── Copy-Trade: CT-2 активирован ─────────────────────────────────────────
-    // Условия CT-2 выполнены: 33 eligible кошелька, WR > 65%.
-    // minWinRate поднят до 0.65 (было 0.55) — только проверенные.
-    // minTrades = 20 (было 5) — нужна история.
+    // ── Copy-Trade: 2-tier system (brainstorm v4) ──────────────────────────────
+    // Tier 1 (conservative): WR≥60%, ≥15 trades → полный вход
+    // Tier 2 (aggressive):   WR≥50%, ≥8 trades  → половина входа
+    // Расширяем воронку: ранее 33 eligible, теперь ~100+ кошельков.
     copyTrade: {
-      enabled:              true,    // было false → CT-2 активируем
-      entryAmountSol:       0.08,    // было 0.03 → масштабируем (proven-edge канал)
-      maxPositions:         3,       // 1→3 (15 SOL/нед P2): eligible кошельки имеют WR>65%
-      minBuySolFromTracked: 0.25,    // было 0.15 — только значимые входы
+      enabled:              true,
+      entryAmountSol:       0.08,    // tier 1 entry
+      tier2EntryAmountSol:  0.04,    // tier 2 entry (half)
+      maxPositions:         3,
+      minBuySolFromTracked: 0.25,
       slippageBps:          2000,
     },
 
@@ -353,13 +373,18 @@ export const config = {
     },
   },
 
-  // ─── Wallet Tracker ─────────────────────────────────────────────────────────
-  // Пороги подняты под CT-2: minWinRate 0.65, minCompletedTrades 20.
+  // ─── Wallet Tracker (2-tier, brainstorm v4) ─────────────────────────────────
+  // Tier 1: WR≥60%, ≥15 trades → conservative, полный вход
+  // Tier 2: WR≥50%, ≥8 trades  → aggressive, половина входа
   walletTracker: {
-    minCompletedTrades:    20,          // было 5 → нужна история
-    minWinRate:            0.65,        // было 0.55 → только сильные кошельки
+    // Tier 1 (isCopyEligible)
+    minCompletedTrades:    15,          // 20→15: расширяем воронку
+    minWinRate:            0.60,        // 0.65→0.60: больше eligible кошельков
+    // Tier 2 (isCopyEligibleTier2)
+    tier2MinCompletedTrades: 8,
+    tier2MinWinRate:         0.50,
     maxTrackedWallets:     2000,
-    minCopyBuySolLamports: 150_000_000, // 0.15 SOL (было 0.10)
+    minCopyBuySolLamports: 150_000_000, // 0.15 SOL
     saveIntervalMs:        300_000,
   },
 

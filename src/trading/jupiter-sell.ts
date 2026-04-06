@@ -100,6 +100,82 @@ export async function sellTokenJupiter(
   return txId;
 }
 
+/**
+ * Pre-warm Jupiter quote (brainstorm v4).
+ * Called speculatively while position is open to cache the quote.
+ * Returns outAmountSol or null if unavailable.
+ */
+export async function getJupiterQuote(
+  mintStr: string,
+  amountRaw: bigint,
+  slippageBps: number = 3000,
+): Promise<{ outAmountSol: number; quoteResponse: any } | null> {
+  try {
+    const quoteResponse = await fetchWithApiKey(
+      `${JUPITER_BASE}/quote?` +
+      `inputMint=${mintStr}` +
+      `&outputMint=${WSOL_MINT}` +
+      `&amount=${amountRaw.toString()}` +
+      `&slippageBps=${slippageBps}` +
+      `&swapMode=ExactIn` +
+      `&onlyDirectRoutes=false` +
+      `&asLegacyTransaction=false`
+    );
+    if (!quoteResponse?.outAmount) return null;
+    return { outAmountSol: Number(quoteResponse.outAmount) / 1e9, quoteResponse };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Execute Jupiter sell using a pre-warmed quote (brainstorm v4).
+ * Falls back to full sellTokenJupiter if quote is stale.
+ */
+export async function sellTokenJupiterWithQuote(
+  connection: Connection,
+  mintStr: string,
+  payer: Keypair,
+  amountRaw: bigint,
+  preWarmedQuote: any,
+  slippageBps: number = 3000,
+): Promise<string> {
+  const owner = payer.publicKey.toBase58();
+  logger.info(`[jupiter-sell] Using pre-warmed quote for ${mintStr.slice(0, 8)}...`);
+
+  try {
+    const swapResponse = await fetchWithApiKey(
+      `${JUPITER_BASE}/swap`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          quoteResponse: preWarmedQuote,
+          userPublicKey: owner,
+          wrapAndUnwrapSol: true,
+          dynamicComputeUnitLimit: true,
+          dynamicSlippage: true,
+          prioritizationFeeLamports: 'auto',
+        }),
+      }
+    );
+
+    if (!swapResponse?.swapTransaction) {
+      logger.warn('[jupiter-sell] Pre-warmed quote expired, falling back to full flow');
+      return sellTokenJupiter(connection, mintStr, payer, amountRaw, slippageBps);
+    }
+
+    const txBuf = Buffer.from(swapResponse.swapTransaction, 'base64');
+    const tx = VersionedTransaction.deserialize(txBuf);
+    tx.sign([payer]);
+    const txId = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 2 });
+    logger.info(`[jupiter-sell] Pre-warmed TX sent: ${txId.slice(0, 8)}...`);
+    return txId;
+  } catch (err) {
+    logger.warn('[jupiter-sell] Pre-warmed sell failed, falling back:', err);
+    return sellTokenJupiter(connection, mintStr, payer, amountRaw, slippageBps);
+  }
+}
+
 async function fetchWithApiKey(url: string, init?: RequestInit): Promise<any> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

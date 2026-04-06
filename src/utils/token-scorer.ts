@@ -21,6 +21,7 @@ export interface TokenFeatures {
   hasMintAuthority: boolean;
   hasFreezeAuthority: boolean;
   isMayhem: boolean;
+  topHolderPct?: number;         // % от supply у top holder (0-100), undefined = не доступен
 }
 
 export interface ScoringResult {
@@ -60,6 +61,14 @@ export function scoreToken(features: TokenFeatures, minScore: number = 25): Scor
   else if (features.rugcheckRisk === 'high') { score -= 50; reasons.push(`RUG_HIGH(-50)`); }
   if (features.hasMintAuthority) { score -= 40; reasons.push(`MINT_AUTH(-40)`); }
   if (features.hasFreezeAuthority) { score -= 30; reasons.push(`FREEZE(-30)`); }
+
+  // ── Holder concentration (brainstorm v4) ──
+  // High concentration = rug risk. Top holder >50% = dump imminent.
+  if (features.topHolderPct !== undefined) {
+    if (features.topHolderPct > 50) { score -= 25; reasons.push(`TOP_HOLDER_${features.topHolderPct.toFixed(0)}%(-25)`); }
+    else if (features.topHolderPct > 30) { score -= 10; reasons.push(`holder_conc_${features.topHolderPct.toFixed(0)}%(-10)`); }
+    else if (features.topHolderPct < 15) { score += 5; reasons.push(`holder_distributed(+5)`); }
+  }
 
   // ── Mayhem bypass ──
   // Mayhem токены обходят scoring — у них своя exit логика.

@@ -47,7 +47,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
-import { config }                          from '../config';
+import { config, computeDynamicSlippage }   from '../config';
 import { queueJitoSend }                   from '../infra/jito-queue';
 import { getCachedBlockhashWithHeight }    from '../infra/blockhash-cache';
 import { getCachedPriorityFee }            from '../infra/priority-fee-cache';
@@ -538,11 +538,14 @@ export async function buyTokenPumpSwap(
   const { accs, poolState, tokenReserve, solReserve } = await resolveSwapAccounts(connection, mint, owner, getMintState(mint).pool);
 
   const solIn           = BigInt(Math.floor(solAmount * 1e9));
+  // Dynamic slippage: reduce when entry is small relative to pool liquidity
+  const liquiditySol    = Number(solReserve) / 1e9;
+  const effectiveSlippage = computeDynamicSlippage(solAmount, liquiditySol, slippageBps);
   // Bot BUY = IDL buy: платим wSOL (quote), получаем meme token (base)
   // computeAmountOut(wsolIn, poolWsolReserve, poolTokenReserve)
   const expectedTokens  = computeAmountOut(solIn, solReserve, tokenReserve);
-  const minTokensOut    = computeMinOut(expectedTokens, slippageBps, tokenReserve);
-  const maxSolIn        = (solIn * BigInt(10000 + slippageBps)) / 10000n;
+  const minTokensOut    = computeMinOut(expectedTokens, effectiveSlippage, tokenReserve);
+  const maxSolIn        = (solIn * BigInt(10000 + effectiveSlippage)) / 10000n;
 
   const isToken2022 = !accs.baseTokenProgram.equals(TOKEN_PROGRAM_ID);
   const wsolAta = accs.userQuoteTokenAccount;
@@ -601,9 +604,10 @@ export async function sellTokenPumpSwap(
   urgent:          boolean = false,
   directRpc:       boolean = false,
   useBloXroute:    boolean = false,
+  priorityFeeOverride?: number,    // brainstorm v4: escalated priority fee
 ): Promise<string> {
   const owner       = payer.publicKey;
-  const priorityFee = getCachedPriorityFee();
+  const priorityFee = priorityFeeOverride ?? getCachedPriorityFee();
   const maxTip      = config.jito.maxTipAmountSol;
   const estFee      = estimateTransactionFee(2, config.compute.unitLimit, priorityFee);
 
