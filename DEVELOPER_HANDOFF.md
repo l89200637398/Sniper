@@ -23,7 +23,7 @@
 - **Jito bundles**: работает, dynamic tips из getTipFloor, retry с escalation
 - **Token scoring**: работает, 0-100 баллов
 - **Safety checks**: работает (mint authority, freeze authority, rugcheck API)
-- **Copy-trade (CT-2)**: включён, maxPositions=3, entryAmountSol=0.08, minBuySolFromTracked=0.25
+- **Copy-trade (2-tier)**: T1: WR≥60%/15+ trades → 0.08 SOL; T2: WR≥50%/8+ trades → 0.04 SOL; maxPositions=3
 - **Telegram бот**: работает, все команды
 - **Console control**: `scripts/control.ts` — запуск/остановка без Telegram
 - **Trade logging**: JSONL логи (events + trades)
@@ -37,6 +37,19 @@
 - **Jupiter fallback**: Jupiter Metis V6 aggregator как последнее средство sell (RPC-only)
 - **Prometheus metrics**: endpoint на порту 9469 (/metrics, /snapshot)
 - **Persisted createSlots**: createSlotForMint сохраняется на диск для точного age tracking
+
+### Brainstorm v4 (апрель 2026)
+
+- **Dynamic slippage**: `computeDynamicSlippage()` в `config.ts` — формула `sqrt(entry/liquidity) × maxBps`, min 300 bps. Снижает переплату на 3-5% при мелких входах
+- **Batch RPC**: `checkPositions()` использует `getMultipleAccountsInfo()` вместо N sequential `getAccountInfo()` — 1 RPC call для всех позиций
+- **Adaptive sell polling**: confirmation проверяется каждые 100ms (вместо fixed 500ms), maxWait Jito=600ms / directRpc=400ms
+- **Priority fee escalation**: sell retry ×1.5 priority fee на каждом attempt (cap 5×), не только Jito tip
+- **feeRecipient cache**: 5s TTL, исключает RPC вызов из sell retry loop
+- **2-tier copy-trade**: T1 (WR≥60%, 15+ trades, 0.08 SOL), T2 (WR≥50%, 8+ trades, 0.04 SOL). Loss streak filter (T1: 5+, T2: 3+)
+- **Holder concentration**: `getTokenLargestAccounts()` при entry scoring — top holder >50% = -25pts, >30% = -10pts
+- **Aggregated buy-volume gate**: 2+ independent wallets с суммарно ≥0.5 SOL = fast entry
+- **Jupiter pre-warm**: спекулятивно кешируем quote (5s TTL) для позиций с PnL>50% или age>30s
+- **minTokenAgeMs**: 150→400ms — пропускаем bundled dev-buys, фильтруем same-block rugs
 
 ### Что в процессе
 
