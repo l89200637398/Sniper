@@ -30,8 +30,8 @@ export const config = {
     tipAmountSol:      0.00003,    // было 0.000012 → слишком низкий, bundles не приземлялись
     maxTipAmountSol:   0.0001,     // было 0.00005 → потолок для retry escalation
     minTipAmountSol:   0.000015,   // было 0.000008
-    maxRetries:        5,          // было 2 → слишком мало, bundle не успевал приземлиться
-    tipIncreaseFactor: 1.3,        // было 1.2
+    maxRetries:        3,          // 5→3: меньше задержка (3×400ms=1.2с vs 5×400ms=2с), быстрее до maxTip
+    tipIncreaseFactor: 1.5,        // 1.3→1.5: агрессивнее растём к maxTip за 3 попытки
     burstCount:        1,
     burstTipMultipliers: [1.0],
     urgentMaxTipImmediate: true,   // dump-сигнал сразу идёт с maxTipAmountSol, без ramp
@@ -92,7 +92,7 @@ export const config = {
     minIndependentBuySol:  0.25,     // 0.15→0.25: только значимые входы (15 SOL/нед патч)
     waitForBuyerTimeoutMs: 3000,     // было 10000
     // earlyExitTimeoutMs: 800 — быстрый выход при слабых токенах
-    earlyExitTimeoutMs:    2000,     // было 800 → срезало profitable trades (HISTORY_DEV_SNIPER P0)
+    earlyExitTimeoutMs:    1500,     // 800→2000→1500: 2с = слишком долго при 0.15 entry, 1.5с — баланс
 
     // ── v3 Scoring ────────────────────────────────────────────────────────────
     // ВАЖНО: scoring при входе = только creatorRecentTokens (sync).
@@ -376,6 +376,6 @@ export const config = {
     pendingBuyTimeoutMs:         10000,
     confirmTransactionTimeoutMs: 30000,
     optimisticPositionTtlMs:     60000,
-    confirmIntervalMs:           800,    // было 200 → bundle не успевал приземлиться за 200ms
+    confirmIntervalMs:           400,    // было 800 → 400ms компромисс: bundle приземляется за 200-600ms
   },
 };

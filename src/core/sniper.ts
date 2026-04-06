@@ -3380,7 +3380,7 @@ export class Sniper {
       // ОПТИМИЗИРОВАНО: delay 300ms (было 400), flat (не растущий),
       // batch getSignatureStatuses для ВСЕХ отправленных txId за один RPC call
       const MAX_SELL_ATTEMPTS = 4;
-      const SELL_CONFIRM_DELAY_MS = 300;
+      const SELL_CONFIRM_DELAY_MS = 500; // 300→500: Jito landing 200-800ms, 300ms = ложный negative → лишний retry
 
       // bloXroute только как последнее средство + процентный кэп
       const bxTipSol = config.bloxroute.tipLamports / 1e9;
