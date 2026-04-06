@@ -2037,17 +2037,22 @@ export class Sniper {
                     // ─── НОВОЕ: для токенов score=0 запускаем таймер раннего выхода ───
                     const socialScore = this.mintSocialScore.get(token.mint) ?? 0;
                     if (socialScore === 0 && !this.earlyExitTimers.has(token.mint) && !this.sellingMints.has(token.mint)) {
+                      // Дифференцированный таймаут: socialLow (0.03 SOL) — 1000ms,
+                      // full entry (0.15 SOL) — earlyExitTimeoutMs (1500ms).
+                      // При socialLow рисковать 1.5с нет смысла — ранний выход дешёвый.
+                      const isSocialLow = position.entryAmountSol <= pumpFunCfg.entryAmountSol * config.strategy.socialLowMultiplier * 1.1;
+                      const earlyTimeout = isSocialLow ? Math.min(1000, config.strategy.earlyExitTimeoutMs) : config.strategy.earlyExitTimeoutMs;
                       const exitTimer = setTimeout(async () => {
-                        logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${config.strategy.earlyExitTimeoutMs}ms — exiting position`);
-                        logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint });
+                        logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${earlyTimeout}ms — exiting position`);
+                        logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint, timeoutMs: earlyTimeout, socialLow: isSocialLow });
                         const pos = this.positions.get(token.mint);
                         if (pos && !this.sellingMints.has(token.mint)) {
                           await this.executeFullSell(pos, token.mint, { action: 'full', reason: 'early_exit', urgent: true });
                         }
                         this.earlyExitTimers.delete(token.mint);
-                      }, config.strategy.earlyExitTimeoutMs);
+                      }, earlyTimeout);
                       this.earlyExitTimers.set(token.mint, exitTimer);
-                      logger.info(`⏱️ Early exit timer started (${config.strategy.earlyExitTimeoutMs}ms) for ${token.mint.slice(0,8)}`);
+                      logger.info(`⏱️ Early exit timer started (${earlyTimeout}ms, socialLow=${isSocialLow}) for ${token.mint.slice(0,8)}`);
                     }
 
                     // ADDED LOG: POSITION_CONFIRMED_SCORE
@@ -2225,17 +2230,19 @@ export class Sniper {
 
                   const socialScore = this.mintSocialScore.get(token.mint) ?? 0;
                   if (socialScore === 0 && !this.earlyExitTimers.has(token.mint) && !this.sellingMints.has(token.mint)) {
+                    const isSocialLow2 = position.entryAmountSol <= pumpFunCfg.entryAmountSol * config.strategy.socialLowMultiplier * 1.1;
+                    const earlyTimeout2 = isSocialLow2 ? Math.min(1000, config.strategy.earlyExitTimeoutMs) : config.strategy.earlyExitTimeoutMs;
                     const exitTimer = setTimeout(async () => {
-                      logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${config.strategy.earlyExitTimeoutMs}ms — exiting position`);
-                      logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint });
+                      logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${earlyTimeout2}ms — exiting position`);
+                      logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint, timeoutMs: earlyTimeout2, socialLow: isSocialLow2 });
                       const pos = this.positions.get(token.mint);
                       if (pos && !this.sellingMints.has(token.mint)) {
                         await this.executeFullSell(pos, token.mint, { action: 'full', reason: 'early_exit', urgent: true });
                       }
                       this.earlyExitTimers.delete(token.mint);
-                    }, config.strategy.earlyExitTimeoutMs);
+                    }, earlyTimeout2);
                     this.earlyExitTimers.set(token.mint, exitTimer);
-                    logger.info(`⏱️ Early exit timer started (${config.strategy.earlyExitTimeoutMs}ms) for ${token.mint.slice(0,8)}`);
+                    logger.info(`⏱️ Early exit timer started (${earlyTimeout2}ms, socialLow=${isSocialLow2}) for ${token.mint.slice(0,8)}`);
                   }
                 }
                 return true;
@@ -3229,13 +3236,22 @@ export class Sniper {
 
   private startMonitoring() {
     if (this.monitoringInterval) clearInterval(this.monitoringInterval);
-    this.monitoringInterval = setInterval(() => this.checkPositions(), 400);
-    logger.info('Position monitoring started (interval 400ms)');
+    // 600ms base + random jitter 0-200ms = 600-800ms effective.
+    // Stagger внутри checkPositions (50ms между позициями) снижает RPC burst.
+    // При 4 позициях: 4 × getAccountInfo за 600-800ms = ~5-6 req/s вместо 10 req/s.
+    const scheduleNext = () => {
+      const jitter = Math.floor(Math.random() * 200);
+      this.monitoringInterval = setTimeout(() => {
+        this.checkPositions().finally(scheduleNext);
+      }, 600 + jitter);
+    };
+    scheduleNext();
+    logger.info('Position monitoring started (interval 600-800ms with jitter)');
   }
 
   private stopMonitoring() {
     if (this.monitoringInterval) {
-      clearInterval(this.monitoringInterval);
+      clearTimeout(this.monitoringInterval);
       this.monitoringInterval = null;
       logger.info('Position monitoring stopped');
     }
@@ -3246,9 +3262,13 @@ export class Sniper {
     this.isCheckingPositions = true;
     try {
       const keys = Array.from(this.positions.keys());
-      await Promise.all(keys.map(async mintStr => {
+      // Stagger RPC calls: 50ms между позициями вместо параллельного burst.
+      // 4 позиции = 200ms spread, снижает пиковую нагрузку на RPC в 4×.
+      for (let idx = 0; idx < keys.length; idx++) {
+        const mintStr = keys[idx];
         const position = this.positions.get(mintStr);
-        if (!position) return;
+        if (!position) continue;
+        if (idx > 0) await new Promise(r => setTimeout(r, 50));
         try {
           if (position.protocol === 'pump.fun' || position.protocol === 'mayhem') {
             try {
@@ -3284,7 +3304,7 @@ export class Sniper {
             setImmediate(() => {
               this.executeFullSell(position, mintStr, { action: 'full', reason: 'rpc_error', urgent: false });
             });
-            return;
+            continue;
           }
 
           logger.debug(
@@ -3300,7 +3320,7 @@ export class Sniper {
         } catch (err) {
           logger.error(`Error checking position ${mintStr}:`, err);
         }
-      }));
+      }
     } finally {
       this.isCheckingPositions = false;
     }
