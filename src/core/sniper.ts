@@ -148,6 +148,10 @@ export class Sniper {
   private static readonly JUP_QUOTE_TTL = 5_000; // 5s TTL for pre-warmed quotes
 
   private createdATAs: Set<string> = new Set();
+  // F7: Token blacklist — mints the bot should never buy
+  private tokenBlacklist: Set<string> = new Set();
+  // F7: Creator blacklist — creators whose tokens should be skipped
+  private creatorBlacklist: Set<string> = new Set();
 
   private pendingBuysMutex = new Mutex();
   private seenMutex = new Mutex();
@@ -1174,6 +1178,12 @@ export class Sniper {
     logger.info(`🔥 NEW PUMP TOKEN DETECTED: ${token.mint}`);
     logEvent('CREATE', { mint: token.mint, creator: token.creator, bondingCurve: token.bondingCurve, tx: token.signature });
 
+    // F7: Blacklist check
+    if (this.isBlacklisted(token.mint, token.creator)) {
+      logger.debug(`Blacklisted token/creator, skip ${token.mint.slice(0,8)}`);
+      return;
+    }
+
     const mintPubkey = new PublicKey(token.mint);
     const protocolInfo = await detectProtocol(this.connection, mintPubkey);
     if (protocolInfo.protocol === 'pumpswap') {
@@ -1711,6 +1721,17 @@ export class Sniper {
         logger.warn(`executePendingBuy: exposure ${totalExposurePre.toFixed(3)} SOL >= limit, abort buy ${token.mint.slice(0,8)}`);
         logEvent('BUY_SKIPPED_EXPOSURE', { mint: token.mint, totalExposure: totalExposurePre });
         return;
+      }
+
+      // F6: Hard balance floor — stop trading entirely below threshold
+      {
+        const minBal = (config.strategy as any).minBalanceToTradeSol ?? 0.5;
+        const bal = (await this.getCachedBalance()) / 1e9;
+        if (bal < minBal) {
+          logger.warn(`⛔ Balance ${bal.toFixed(3)} SOL below minimum ${minBal} — not trading`);
+          logEvent('BALANCE_FLOOR_HIT', { mint: token.mint, balance: bal, minRequired: minBal });
+          return;
+        }
       }
 
       // ── Проверка баланса кошелька перед отправкой buy ──────────────────────
@@ -2457,6 +2478,12 @@ export class Sniper {
 
   private async onNewPumpSwapToken(token: PumpSwapNewPool) {
     if (!this.running) return;
+
+    // F7: Blacklist check
+    if (this.isBlacklisted(token.mint, token.creator)) {
+      logger.debug(`Blacklisted PumpSwap token/creator, skip ${token.mint.slice(0,8)}`);
+      return;
+    }
 
     const hasOpenPosition = this.positions.has(token.mint);
 
@@ -4481,5 +4508,31 @@ export class Sniper {
   private getEffectiveEntry(baseEntry: number): number {
     const dCfg = (config.strategy as any).defensive;
     return this.defensiveMode && dCfg?.enabled ? baseEntry * (dCfg.entryMultiplier ?? 1) : baseEntry;
+  }
+
+  // ── F7: Blacklist management ────────────────────────────────────────────────
+
+  addToBlacklist(mint: string): void {
+    this.tokenBlacklist.add(mint);
+    logger.info(`🚫 Token blacklisted: ${mint.slice(0, 8)}`);
+  }
+
+  removeFromBlacklist(mint: string): boolean {
+    const removed = this.tokenBlacklist.delete(mint);
+    if (removed) logger.info(`✅ Token unblacklisted: ${mint.slice(0, 8)}`);
+    return removed;
+  }
+
+  addCreatorToBlacklist(creator: string): void {
+    this.creatorBlacklist.add(creator);
+    logger.info(`🚫 Creator blacklisted: ${creator.slice(0, 8)}`);
+  }
+
+  isBlacklisted(mint: string, creator?: string): boolean {
+    return this.tokenBlacklist.has(mint) || (!!creator && this.creatorBlacklist.has(creator));
+  }
+
+  getBlacklistStats(): { tokens: number; creators: number } {
+    return { tokens: this.tokenBlacklist.size, creators: this.creatorBlacklist.size };
   }
 }

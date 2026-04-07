@@ -84,6 +84,8 @@ export const config = {
     maxPumpFunPositions:  3,         // 2→3: p.fun — основной источник, больше одновременных
     maxPumpSwapPositions: 1,
     maxTotalExposureSol:  0.45,      // D3: 0.60→0.45: adjusted for entry 0.10 × 4 = 0.40 + margin
+    // F6: Auto-stop if wallet balance drops below this threshold (SOL)
+    minBalanceToTradeSol: 0.5,       // stop opening new positions below 0.5 SOL
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000

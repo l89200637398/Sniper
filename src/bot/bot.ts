@@ -140,6 +140,34 @@ export class TelegramBot {
         await ctx.reply('❌ Ошибка при очистке dust-токенов');
       }
     });
+
+    // F7: Blacklist management via Telegram
+    this.bot.hears(/^\/blacklist\s+(\S+)$/i, async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      const mint = ctx.match[1];
+      this.sniper.addToBlacklist(mint);
+      await ctx.reply(`🚫 Token blacklisted: ${mint.slice(0, 8)}...`);
+    });
+
+    this.bot.hears(/^\/unblacklist\s+(\S+)$/i, async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      const mint = ctx.match[1];
+      const removed = this.sniper.removeFromBlacklist(mint);
+      await ctx.reply(removed ? `✅ Removed from blacklist: ${mint.slice(0, 8)}...` : `Token not in blacklist`);
+    });
+
+    this.bot.hears(/^\/blacklist_creator\s+(\S+)$/i, async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      const creator = ctx.match[1];
+      this.sniper.addCreatorToBlacklist(creator);
+      await ctx.reply(`🚫 Creator blacklisted: ${creator.slice(0, 8)}...`);
+    });
+
+    this.bot.hears(/^\/blacklist_stats$/i, async (ctx) => {
+      if (!this.isAuthorized(ctx)) return;
+      const stats = this.sniper.getBlacklistStats();
+      await ctx.reply(`Blacklist: ${stats.tokens} tokens, ${stats.creators} creators`);
+    });
   }
 
   private mainKeyboard() {
