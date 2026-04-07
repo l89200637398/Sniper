@@ -67,7 +67,8 @@ const PUMP_PROGRAM      = new PublicKey(PUMP_FUN_PROGRAM_ID);
 const FEE_PROGRAM       = new PublicKey(FEE_PROGRAM_ID);
 const WSOL_MINT         = new PublicKey(config.wsolMint);
 
-const POOL_FEE_BPS               = 30n;
+// B9 FIX: PumpSwap fee ~125 bps (1.25%) for most pools, was incorrectly hardcoded as 30 bps
+const POOL_FEE_BPS               = 125n;
 const POOL_ACCOUNT_DISCRIMINATOR = sha256('account:Pool').subarray(0, 8);
 
 // ─── PDA helpers ──────────────────────────────────────────────────────────────

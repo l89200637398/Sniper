@@ -81,6 +81,14 @@ function getStrategyForProtocol(protocol: string) {
 const MIN_REAL_SOL_RESERVES = 0.1; // 0.1 SOL
 const CURVE_ALMOST_COMPLETE_THRESHOLD = 300_000_000_000_000n; // 300 млрд virtualTokenReserves
 
+/** B4 FIX: Safe BigInt→Number conversion — warns on precision loss (value > 2^53-1) */
+function safeNumber(val: bigint, label = ''): number {
+  if (val > BigInt(Number.MAX_SAFE_INTEGER)) {
+    logger.warn(`BigInt overflow → Number: ${label} = ${val.toString()} exceeds MAX_SAFE_INTEGER`);
+  }
+  return Number(val);
+}
+
 interface PendingBuy {
   tokenData: PumpToken;
   timer: NodeJS.Timeout;
@@ -420,25 +428,26 @@ export class Sniper {
             position.cashbackEnabled
           );
 
-          const { blockhash, lastValidBlockHeight } = await getCachedBlockhashWithHeight();
-          let confirmation;
-          try {
-            confirmation = await Promise.race([
-              this.connection.confirmTransaction({
-                signature: txId,
-                blockhash,
-                lastValidBlockHeight
-              }, 'confirmed'),
-              new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('confirmTransaction timeout')), config.timeouts.confirmTransactionTimeoutMs)
-              ),
-            ]);
-          } catch (err) {
-            logger.error(`Manual close tx ${txId} не подтверждена:`, err);
-            return;
+          // B8 FIX: Use getSignatureStatuses polling instead of confirmTransaction
+          // (confirmTransaction requires matching blockhash which may differ from TX's actual blockhash)
+          let confirmed = false;
+          const pollStart = Date.now();
+          const maxWaitMs = config.timeouts.confirmTransactionTimeoutMs;
+          while (Date.now() - pollStart < maxWaitMs) {
+            await new Promise(r => setTimeout(r, 200));
+            const statuses = await this.connection.getSignatureStatuses([txId]);
+            const status = statuses.value[0];
+            if (status?.confirmationStatus && !status.err) {
+              confirmed = true;
+              break;
+            }
+            if (status?.err) {
+              logger.error(`Manual close tx failed:`, status.err);
+              return;
+            }
           }
-          if (confirmation.value.err) {
-            logger.error(`Manual close tx failed:`, confirmation.value.err);
+          if (!confirmed) {
+            logger.error(`Manual close tx ${txId} не подтверждена после ${maxWaitMs}ms`);
             return;
           }
 
@@ -794,7 +803,7 @@ export class Sniper {
           const solOffset = layout.bondingCurve?.solReserveOffset ?? 16;
           const virtualSolReserves = update.data.readBigUInt64LE(solOffset);
           const virtualTokenReserves = update.data.readBigUInt64LE(tokenOffset);
-          position.updatePrice(Number(virtualSolReserves), Number(virtualTokenReserves));
+          position.updatePrice(safeNumber(virtualSolReserves, 'vSol'), safeNumber(virtualTokenReserves, 'vToken'));
           position.updateErrors = 0;
           logger.debug(`[gRPC] Position ${mintStr} updated: price=${position.currentPrice.toFixed(12)} pnl=${position.pnlPercent.toFixed(1)}%`);
 
@@ -830,7 +839,7 @@ export class Sniper {
         if (cached.baseReserve > 0n && cached.quoteReserve > 0n) {
           const position = this.positions.get(swapInfo.mint);
           if (position) {
-            position.updatePrice(Number(cached.quoteReserve), Number(cached.baseReserve));
+            position.updatePrice(safeNumber(cached.quoteReserve, 'quoteRes'), safeNumber(cached.baseReserve, 'baseRes'));
             position.updateErrors = 0;
             logger.debug(`[gRPC] PumpSwap ${swapInfo.mint.slice(0,8)} updated: price=${position.currentPrice.toFixed(12)} pnl=${position.pnlPercent.toFixed(1)}%`);
 
@@ -1230,7 +1239,7 @@ export class Sniper {
       if (virtualTokenReserves > 0n) {
         const realSolReserves = accountInfo.data.readBigUInt64LE(32);
         if (realSolReserves > 0n) {
-          const realSol = Number(realSolReserves) / 1e9;
+          const realSol = safeNumber(realSolReserves, 'realSol') / 1e9;
           if (realSol >= MIN_REAL_SOL_RESERVES) {
             logger.info(`✅ Bonding curve ready (${realSol.toFixed(3)} SOL real), executing buy immediately`);
             curveReady = true;
@@ -1303,7 +1312,7 @@ export class Sniper {
     if (curveReady && reserves) {
       // Проверяем минимальную ликвидность перед входом
       if (!this.checkMinLiquidityFromReserves(reserves.virtualSolReserves, 'pump.fun')) {
-        logger.warn(`Skipping ${token.mint.slice(0,8)} due to low liquidity (real=${(Number(reserves.virtualSolReserves)/1e9 - 30).toFixed(3)} SOL < ${config.strategy.pumpFun.minLiquiditySol})`);
+        logger.warn(`Skipping ${token.mint.slice(0,8)} due to low liquidity (real=${(safeNumber(reserves.virtualSolReserves, 'vSolRes')/1e9 - 30).toFixed(3)} SOL < ${config.strategy.pumpFun.minLiquiditySol})`);
         logEvent('BUY_SKIPPED_LOW_LIQUIDITY', { mint: token.mint });
         return;
       }
@@ -1433,7 +1442,7 @@ export class Sniper {
           const virtualTokenReserves = accountInfo.data.readBigUInt64LE(tokenOffset);
           if (virtualTokenReserves > 0n) {
             const realSolReserves = accountInfo.data.readBigUInt64LE(32);
-            const realSol = Number(realSolReserves) / 1e9;
+            const realSol = safeNumber(realSolReserves, 'realSol') / 1e9;
             if (realSol >= MIN_REAL_SOL_RESERVES) {
               const pending = await this.pendingBuysMutex.runExclusive(() => {
                 const p = this.pendingBuys.get(token.mint);
@@ -1520,7 +1529,7 @@ export class Sniper {
   }
 
   private checkMinLiquidityFromReserves(virtualSolReserves: bigint, protocol: 'pump.fun' | 'pumpswap'): boolean {
-    const virtualLiquidity = Number(virtualSolReserves) / 1e9;
+    const virtualLiquidity = safeNumber(virtualSolReserves, 'virtualLiq') / 1e9;
     const minLiquidity = protocol === 'pump.fun'
       ? config.strategy.pumpFun.minLiquiditySol
       : config.strategy.pumpSwap.minLiquiditySol;
@@ -1591,7 +1600,7 @@ export class Sniper {
 
     const vSol    = freshData.virtualSolReserves;
     const vToken  = freshData.virtualTokenReserves;
-    const realSol = Number(vSol) / 1e9 - 30;
+    const realSol = safeNumber(vSol, 'vSol') / 1e9 - 30;
 
     if (realSol > mayhemCfg.maxRealSolAtEntry) {
       logger.info(`Mayhem entry skipped — too much bought already (${realSol.toFixed(2)} SOL)`);
@@ -1641,14 +1650,14 @@ export class Sniper {
       isMayhem,
     });
 
-    const buildTx = async (): Promise<VersionedTransaction> => {
+    const buildTx = async (burstIndex?: number): Promise<VersionedTransaction> => {
       const { blockhash } = await getCachedBlockhashWithHeight();
       const priorityFee   = getCachedPriorityFee();
       const message = new TransactionMessage({
         payerKey:        this.payer.publicKey,
         recentBlockhash: blockhash,
         instructions: [
-          ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+          ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit + (burstIndex ?? 0) }),
           ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
           createAtaIx,
           buyIx,
@@ -1816,14 +1825,14 @@ export class Sniper {
           isMayhem,
         });
 
-        const buildTx = async (): Promise<VersionedTransaction> => {
+        const buildTx = async (burstIndex?: number): Promise<VersionedTransaction> => {
           const { blockhash } = await getCachedBlockhashWithHeight();
           const priorityFee   = getCachedPriorityFee();
           const message = new TransactionMessage({
             payerKey:        this.payer.publicKey,
             recentBlockhash: blockhash,
             instructions: [
-              ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+              ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit + (burstIndex ?? 0) }),
               ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
               createAtaIx,
               buyIx,
@@ -1879,7 +1888,7 @@ export class Sniper {
         this.payer.publicKey, ata, this.payer.publicKey, mintPubkey, mintState.tokenProgramId
       );
 
-      const liquiditySol = Number(freshData.virtualSolReserves) / 1e9;
+      const liquiditySol = safeNumber(freshData.virtualSolReserves, 'liquiditySol') / 1e9;
       const dynSlippage = computeDynamicSlippage(adjustedEntryAmountSol, liquiditySol, pumpFunCfg.slippageBps);
 
       const buyIx = buildBuyInstructionFromCreate({
@@ -1898,14 +1907,14 @@ export class Sniper {
         isMayhem,
       });
 
-      const buildTx = async (): Promise<VersionedTransaction> => {
+      const buildTx = async (burstIndex?: number): Promise<VersionedTransaction> => {
         const { blockhash } = await getCachedBlockhashWithHeight();
         const priorityFee   = getCachedPriorityFee();
         const message = new TransactionMessage({
           payerKey:        this.payer.publicKey,
           recentBlockhash: blockhash,
           instructions: [
-            ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit + (burstIndex ?? 0) }),
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
             createAtaIx,
             buyIx,
@@ -1953,7 +1962,7 @@ export class Sniper {
       const effectiveEntry   = this.getEffectiveEntry(overrideEntryAmountSol ?? cfg.entryAmountSol);
       const decimals         = 6;
       const amountInLamports = BigInt(Math.floor(effectiveEntry * 1e9));
-      const expectedTokens   = Number((amountInLamports * virtualTokenReserves) / virtualSolReserves) / Math.pow(10, decimals);
+      const expectedTokens   = safeNumber((amountInLamports * virtualTokenReserves) / virtualSolReserves, 'expectedTokensRaw') / Math.pow(10, decimals);
       const entryPrice       = effectiveEntry / expectedTokens;
 
       const cashbackEnabled = curveData && curveData.length > 82 ? isCashbackEnabled(curveData) : false;
@@ -2697,7 +2706,7 @@ export class Sniper {
 
       const pumpSwapCfg      = getStrategyForProtocol('pumpswap');
       const amountInLamports = BigInt(Math.floor(pumpSwapCfg.entryAmountSol * 1e9));
-      const expectedTokens   = Number((amountInLamports * baseReserve) / quoteReserve) / Math.pow(10, decimals);
+      const expectedTokens   = safeNumber((amountInLamports * baseReserve) / quoteReserve, 'expectedTokensRaw') / Math.pow(10, decimals);
       const entryPrice       = pumpSwapCfg.entryAmountSol / expectedTokens;
 
       const position = new Position(
@@ -3389,7 +3398,7 @@ export class Sniper {
             const solOffset = layout.bondingCurve?.solReserveOffset ?? 16;
             const vSol = accInfo.data.readBigUInt64LE(solOffset);
             const vToken = accInfo.data.readBigUInt64LE(tokenOffset);
-            position.updatePrice(Number(vSol), Number(vToken));
+            position.updatePrice(safeNumber(vSol, 'vSol'), safeNumber(vToken, 'vToken'));
             position.updateErrors = 0;
           } else if (entry.type === 'swap_base') {
             const accInfo = batchResults[entry.idx];
@@ -3424,7 +3433,7 @@ export class Sniper {
             try {
               const reserves = await this.getRaydiumReserves(position);
               if (reserves) {
-                position.updatePrice(Number(reserves.solReserve), Number(reserves.tokenReserve));
+                position.updatePrice(safeNumber(reserves.solReserve, 'solRes'), safeNumber(reserves.tokenReserve, 'tokenRes'));
                 position.updateErrors = 0;
               } else {
                 position.updateErrors++;
@@ -3591,6 +3600,30 @@ export class Sniper {
           reason: decision.reason,
         });
         try {
+          // B6 FIX: Re-read ATA balance on retries — previous attempt may have partially sold
+          if (attempt > 0) {
+            try {
+              const mintState = getMintState(mintPk);
+              if (mintState.tokenProgramId) {
+                const ata = await getAssociatedTokenAddress(mintPk, this.payer.publicKey, false, mintState.tokenProgramId);
+                const ataInfo = await withRpcLimit(() => this.connection.getTokenAccountBalance(ata));
+                const freshAmount = ataInfo?.value ? BigInt(ataInfo.value.amount) : 0n;
+                if (freshAmount === 0n) {
+                  logger.info(`ATA empty on retry ${attempt+1} for ${mintStr.slice(0,8)} — sell likely landed`);
+                  sellSuccess = true;
+                  confirmedTxId = lastTxId;
+                  break;
+                }
+                if (freshAmount < realAmountRaw) {
+                  logger.info(`ATA balance decreased on retry: ${realAmountRaw} → ${freshAmount} for ${mintStr.slice(0,8)}`);
+                  realAmountRaw = freshAmount;
+                }
+              }
+            } catch (e) {
+              logger.debug(`ATA re-read failed on retry ${attempt+1}: ${e}`);
+            }
+          }
+
           // FIX feeRecipient: cached with 5s TTL (brainstorm v4)
           // Не дёргаем RPC внутри retry loop — используем кэш.
           let feeRecipient: PublicKey | undefined;
@@ -4007,13 +4040,13 @@ export class Sniper {
         isMayhem: mintState.isMayhemMode ?? false,
       });
 
-      const buildTx = async (): Promise<VersionedTransaction> => {
+      const buildTx = async (burstIndex?: number): Promise<VersionedTransaction> => {
         const { blockhash } = await getCachedBlockhashWithHeight();
         const priorityFee = getCachedPriorityFee();
         const message = new TransactionMessage({
           payerKey: this.payer.publicKey, recentBlockhash: blockhash,
           instructions: [
-            ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
+            ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit + (burstIndex ?? 0) }),
             ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
             createAtaIx, buyIx,
           ],
@@ -4125,16 +4158,23 @@ export class Sniper {
           attempt > 0 // directRpc on retry
         );
 
-        const { blockhash, lastValidBlockHeight } = await getCachedBlockhashWithHeight();
-        const confirmation = await Promise.race([
-          this.connection.confirmTransaction({ signature: txId!, blockhash, lastValidBlockHeight }, 'confirmed'),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), config.timeouts.confirmTransactionTimeoutMs)),
-        ]);
-
-        if (confirmation.value.err) {
-          logger.warn(`Partial sell attempt ${attempt+1} reverted: ${JSON.stringify(confirmation.value.err)}`);
-          continue; // retry with fresh feeRecipient
+        // B8 FIX: Use getSignatureStatuses polling instead of confirmTransaction
+        let partialConfirmed = false;
+        const partialPollStart = Date.now();
+        while (Date.now() - partialPollStart < config.timeouts.confirmTransactionTimeoutMs) {
+          await new Promise(r => setTimeout(r, 200));
+          const statuses = await this.connection.getSignatureStatuses([txId!]);
+          const status = statuses.value[0];
+          if (status?.err) {
+            logger.warn(`Partial sell attempt ${attempt+1} reverted: ${JSON.stringify(status.err)}`);
+            break;
+          }
+          if (status?.confirmationStatus) {
+            partialConfirmed = true;
+            break;
+          }
         }
+        if (!partialConfirmed) continue;
         sellOk = true;
         break;
       } catch (err) {
@@ -4351,7 +4391,7 @@ export class Sniper {
       } else {
         const reserves = await this.getPumpSwapReserves(mint);
         if (!reserves) return false;
-        const liquidity = Number(reserves.quoteReserve) / 1e9;
+        const liquidity = safeNumber(reserves.quoteReserve, 'quoteRes') / 1e9;
         if (liquidity < config.strategy.pumpSwap.minLiquiditySol) {
           logger.warn(`Liquidity too low for PumpSwap ${mint.toBase58()}: ${liquidity.toFixed(3)} SOL`);
           return false;

@@ -44,7 +44,9 @@ async function processItem(item: QueueItem): Promise<void> {
         item.tipMultiplier *= config.jito.tipIncreaseFactor;
       }
 
-      queue.unshift(item);
+      // B12 FIX: Retries go to back of queue to avoid priority inversion
+      // (failed retries should not block fresh urgent sends)
+      queue.push(item);
       setImmediate(() => processQueue());
     } else {
       item.reject(err);

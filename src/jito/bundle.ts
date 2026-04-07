@@ -260,20 +260,17 @@ export interface BurstResult {
 }
 
 export async function sendJitoBurst(
-  buildTx: () => Promise<VersionedTransaction>,
+  buildTx: (burstIndex?: number) => Promise<VersionedTransaction>,
   payer: Keypair,
   tipMultipliers: number[] = config.jito.burstTipMultipliers ?? [1.0, 1.8, 2.8],  // обновлено по умолчанию
   urgent = true
 ): Promise<BurstResult[]> {
   const results: BurstResult[] = [];
 
-  // Строим транзакции последовательно с задержкой 50 мс для уникальности blockhash
+  // B5 FIX: Build TXs with unique compute budget per burst index for distinct signatures
   const txs: VersionedTransaction[] = [];
   for (let i = 0; i < tipMultipliers.length; i++) {
-    txs.push(await buildTx());
-    if (i < tipMultipliers.length - 1) {
-      await new Promise(resolve => setTimeout(resolve, 50));  // увеличено с 10 до 50 мс
-    }
+    txs.push(await buildTx(i));
   }
 
   // Диагностика уникальности
