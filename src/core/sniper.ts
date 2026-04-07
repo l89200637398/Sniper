@@ -144,6 +144,7 @@ export class Sniper {
   private pendingBuysMutex = new Mutex();
   private seenMutex = new Mutex();
   private partialSellingMutex = new Mutex();
+  private sellingMutex = new Mutex();
   private resendMutex = new Mutex();
 
   private reservesCache: Map<string, { reserves: any; timestamp: number }> = new Map();
@@ -391,11 +392,15 @@ export class Sniper {
       const position = this.positions.get(mintStr);
       if (!position) continue;
 
-      if (this.sellingMints.has(mintStr)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(mintStr)) return false;
+        this.sellingMints.add(mintStr);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Skip duplicate sell ${mintStr}`);
         continue;
       }
-      this.sellingMints.add(mintStr);
 
       const promise = (async () => {
         try {
@@ -607,8 +612,12 @@ export class Sniper {
 
   private async closeStalePosition(position: Position): Promise<void> {
     const mintStr = position.mint.toBase58();
-    if (this.sellingMints.has(mintStr)) return;
-    this.sellingMints.add(mintStr);
+    const acquired = await this.sellingMutex.runExclusive(() => {
+      if (this.sellingMints.has(mintStr)) return false;
+      this.sellingMints.add(mintStr);
+      return true;
+    });
+    if (!acquired) return;
     try {
       const amountRaw = BigInt(Math.floor(position.amount * 10 ** position.tokenDecimals));
       const txId = await sellTokenAuto(
@@ -839,7 +848,12 @@ export class Sniper {
 
   private async evaluateAndActOnDecision(position: Position, mintStr: string, decision: SellDecision) {
     if (decision.action === 'full') {
-      if (this.sellingMints.has(mintStr)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(mintStr)) return false;
+        this.sellingMints.add(mintStr);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Skip duplicate sell ${mintStr}`);
         return;
       }
@@ -853,7 +867,12 @@ export class Sniper {
         logEvent('TP_OVERRIDE_FULL_SELL', { mint: mintStr, originalPortion: decision.portion, tpLevel: decision.tpLevelPercent, socialScore });
         decision.action = 'full';
         decision.reason = 'tp_all';
-        if (this.sellingMints.has(mintStr)) {
+        const acquired = await this.sellingMutex.runExclusive(() => {
+          if (this.sellingMints.has(mintStr)) return false;
+          this.sellingMints.add(mintStr);
+          return true;
+        });
+        if (!acquired) {
           logger.debug(`Skip duplicate sell ${mintStr}`);
           return;
         }
@@ -2989,15 +3008,17 @@ export class Sniper {
 
       this.creatorSellSeen.add(sell.mint);
 
-      if (this.sellingMints.has(sell.mint)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(sell.mint)) return false;
+        this.sellingMints.add(sell.mint);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Creator sell: already selling ${sell.mint.slice(0,8)}`);
         return;
       }
 
-      this.sellingMints.add(sell.mint);
-
       // Non-blocking: не ждём завершения sell, gRPC events продолжают обрабатываться.
-      // sellingMints уже защищает от повторных sell-ов. (HISTORY_DEV_SNIPER)
       this.executeFullSell(position, sell.mint, {
         action: 'full',
         reason: 'creator_sell',
@@ -3026,12 +3047,15 @@ export class Sniper {
 
       this.creatorSellSeen.add(sell.mint);
 
-      if (this.sellingMints.has(sell.mint)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(sell.mint)) return false;
+        this.sellingMints.add(sell.mint);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Creator sell: already selling ${sell.mint.slice(0,8)}`);
         return;
       }
-
-      this.sellingMints.add(sell.mint);
 
       // Non-blocking: не ждём завершения sell (HISTORY_DEV_SNIPER)
       this.executeFullSell(position, sell.mint, {

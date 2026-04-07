@@ -29,9 +29,10 @@ export async function detectProtocol(
   connection: Connection,
   mint: PublicKey
 ): Promise<ProtocolInfo> {
-  // Проверяем pump.fun bonding curve
+  // Batch: проверяем pump.fun bonding curve + pumpSwap pool за 1 RPC вызов
   const bondingCurve = getBondingCurvePDA(mint);
-  const bondingAcc = await connection.getAccountInfo(bondingCurve);
+  const pool = getPoolPDA(mint);
+  const [bondingAcc, poolAcc] = await connection.getMultipleAccountsInfo([bondingCurve, pool]);
 
   if (bondingAcc) {
     // complete находится по offset 48 (см. документацию)
@@ -48,9 +49,6 @@ export async function detectProtocol(
     };
   }
 
-  // Если bonding curve нет, проверяем pumpSwap pool
-  const pool = getPoolPDA(mint);
-  const poolAcc = await connection.getAccountInfo(pool);
   if (poolAcc) {
     return {
       protocol: 'pumpswap',
