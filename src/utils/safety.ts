@@ -22,7 +22,8 @@ export async function isTokenSafe(connection: Connection, mint: PublicKey): Prom
   logger.info(`🔍 [safety] Checking token ${mint.toBase58()}`);
   try {
     const accountInfo = await connection.getAccountInfo(mint);
-    if (!accountInfo) return { safe: true };
+    // D5 FIX: null account = mint doesn't exist = NOT safe (was incorrectly returning safe: true)
+    if (!accountInfo) return { safe: false, reason: 'Mint account not found' };
 
     const programId = accountInfo.owner.toString();
     if (programId === '11111111111111111111111111111111') return { safe: true };

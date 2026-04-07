@@ -83,7 +83,7 @@ export const config = {
     maxPositions:         4,         // 3→4: расширяем слоты для throughput (15 SOL/нед патч)
     maxPumpFunPositions:  3,         // 2→3: p.fun — основной источник, больше одновременных
     maxPumpSwapPositions: 1,
-    maxTotalExposureSol:  0.60,      // 0.25→0.60: баланс под новые entry 0.15 × 4 = 0.60
+    maxTotalExposureSol:  0.45,      // D3: 0.60→0.45: adjusted for entry 0.10 × 4 = 0.40 + margin
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
@@ -149,7 +149,7 @@ export const config = {
 
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
     pumpFun: {
-      entryAmountSol:    0.15,               // 0.05→0.15 (15 SOL/нед патч)
+      entryAmountSol:    0.10,               // D3: 0.15→0.10 (saves ~1.5pp slippage, safer for 3-5 SOL bankroll)
       minEntryAmountSol: 0.05,               // 0.015→0.05: согласовано с новым entry
       minLiquiditySol:   0.04,
       slippageBps:       2500,
@@ -175,20 +175,21 @@ export const config = {
         runnerActivationPercent:       100,
         runnerTrailDrawdownPercent:    40,
         runnerHardStopPercent:         65,
-        // Перебалансированный TP ladder (15 SOL/нед патч):
-        // Раньше 8%/0.20 срезал winners слишком рано; теперь больший вес на mid-run (80%).
+        // D1: Rebalanced TP ladder — portions sum to 0.80, leaving 20% as runner reserve.
+        // This uncapped tail rides runners past +200% with only trailing stop protection.
+        // Previous sum=1.0 clipped all runners; now a +1000% token keeps 20% for the ride.
         takeProfit: [
           { levelPercent:  12, portion: 0.15 },
           { levelPercent:  30, portion: 0.15 },
-          { levelPercent:  80, portion: 0.40 },
-          { levelPercent: 200, portion: 0.30 },
+          { levelPercent:  80, portion: 0.30 },
+          { levelPercent: 200, portion: 0.20 },
         ],
       },
     },
 
     // ── PumpSwap AMM ──────────────────────────────────────────────────────────
     pumpSwap: {
-      entryAmountSol:        0.15,   // 0.05→0.15 (15 SOL/нед патч)
+      entryAmountSol:        0.10,   // D3: 0.15→0.10 (saves ~1.5pp slippage)
       minEntryAmountSol:     0.05,   // 0.015→0.05: согласовано с новым entry
       minLiquiditySol:       1,
       slippageBps:           1800,
@@ -211,21 +212,19 @@ export const config = {
         runnerActivationPercent:       200,
         runnerTrailDrawdownPercent:    45,
         runnerHardStopPercent:         70,
-        // Перебалансированный TP ladder PumpSwap: более ранний захват mid-run.
-        // Было 50/200/600/1500 × 25%. Даже "средние" миграции редко доходят до 600%+.
-        // Новая лестница: вес сдвинут на 25%/80% (стабильно достижимо) с runner-tail
-        // ловящим остаток позиции на +500%+.
+        // D1: PumpSwap TP ladder — sum=0.80, 20% runner reserve for mega-runners.
+        // PumpSwap migrations have bigger upside; keeping reserve for +1000%+ moves.
         takeProfit: [
-          { levelPercent:   25, portion: 0.20 },
+          { levelPercent:   25, portion: 0.15 },
           { levelPercent:   80, portion: 0.25 },
-          { levelPercent:  250, portion: 0.30 },
-          { levelPercent:  700, portion: 0.25 },
+          { levelPercent:  250, portion: 0.25 },
+          { levelPercent:  700, portion: 0.15 },
         ],
       },
     },
 
     // ── Общие параметры (fallback) ────────────────────────────────────────────
-    entryAmountSol:    0.15,         // 0.05→0.15 (15 SOL/нед патч)
+    entryAmountSol:    0.10,         // D3: 0.15→0.10 (saves ~1.5pp slippage)
     minEntryAmountSol: 0.05,         // 0.015→0.05: согласовано с новым entry
     minLiquiditySol:   0.05,
     slippageBps:       1500,
@@ -243,11 +242,12 @@ export const config = {
       timeStopAfterMs:           300_000,
       timeStopMinPnl:               -0.07,
       breakEvenAfterTrailingPercent: -1.5,
+      // D1: Mayhem TP ladder — sum=0.80, 20% runner reserve
       takeProfit: [
-        { levelPercent:   40, portion: 0.30 },
+        { levelPercent:   40, portion: 0.25 },
         { levelPercent:  200, portion: 0.20 },
-        { levelPercent:  700, portion: 0.30 },
-        { levelPercent: 1500, portion: 0.20 },
+        { levelPercent:  700, portion: 0.20 },
+        { levelPercent: 1500, portion: 0.15 },
       ],
     },
     pumpSwapMaxReserveFraction: 0.2,
@@ -273,11 +273,12 @@ export const config = {
         timeStopAfterMs:           90_000,
         timeStopMinPnl:               -0.05,
         breakEvenAfterTrailingPercent: -1.5,
+        // D1: Raydium Launch TP ladder — sum=0.80, 20% runner reserve
         takeProfit: [
-          { levelPercent:   8, portion: 0.20 },
+          { levelPercent:   8, portion: 0.15 },
           { levelPercent:  20, portion: 0.10 },
-          { levelPercent:  50, portion: 0.40 },
-          { levelPercent: 150, portion: 0.30 },
+          { levelPercent:  50, portion: 0.35 },
+          { levelPercent: 150, portion: 0.20 },
         ],
       },
     },
@@ -304,11 +305,12 @@ export const config = {
         timeStopAfterMs:           420_000,
         timeStopMinPnl:               -0.08,
         breakEvenAfterTrailingPercent: -1.5,
+        // D1: Raydium CPMM TP ladder — sum=0.80, 20% runner reserve
         takeProfit: [
-          { levelPercent:   50, portion: 0.25 },
-          { levelPercent:  200, portion: 0.25 },
+          { levelPercent:   50, portion: 0.20 },
+          { levelPercent:  200, portion: 0.20 },
           { levelPercent:  600, portion: 0.25 },
-          { levelPercent: 1500, portion: 0.25 },
+          { levelPercent: 1500, portion: 0.15 },
         ],
       },
     },
@@ -335,11 +337,12 @@ export const config = {
         timeStopAfterMs:           420_000,
         timeStopMinPnl:               -0.08,
         breakEvenAfterTrailingPercent: -1.5,
+        // D1: Raydium AMM v4 TP ladder — sum=0.80, 20% runner reserve
         takeProfit: [
-          { levelPercent:   50, portion: 0.25 },
-          { levelPercent:  200, portion: 0.25 },
+          { levelPercent:   50, portion: 0.20 },
+          { levelPercent:  200, portion: 0.20 },
           { levelPercent:  600, portion: 0.25 },
-          { levelPercent: 1500, portion: 0.25 },
+          { levelPercent: 1500, portion: 0.15 },
         ],
       },
     },

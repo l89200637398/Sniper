@@ -2143,6 +2143,13 @@ export class Sniper {
                       realBuyersCount: realBuyers?.size ?? 0,
                     });
 
+                    // D2: Post-entry scoring gate — if token scores below threshold, sell immediately
+                    if (!scoringResult.shouldEnter) {
+                      logger.warn(`📊 LOW SCORE → immediate exit: ${token.mint.slice(0,8)} score=${scoringResult.score} < min=${this.getEffectiveMinScore()} reasons=[${scoringResult.reasons.join(', ')}]`);
+                      logEvent('SCORE_GATE_EXIT', { mint: token.mint, score: scoringResult.score, reasons: scoringResult.reasons });
+                      this.executeFullSell(position, token.mint, { action: 'full', reason: 'score_gate' as any, urgent: true });
+                    }
+
                   } else {
                     logger.warn(`Position for ${token.mint} not found, recreating from tx`);
                     await this.createPositionFromTxInfo(token, txInfo, txId);
