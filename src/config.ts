@@ -94,8 +94,9 @@ export const config = {
     maxJitoTipForEntry:   0.006,     // было 0.012
 
     // ── Серии убытков ────────────────────────────────────────────────────────
-    consecutiveLossesMax: 3,         // было 5 (HISTORY_DEV_SNIPER: source file использует 3)
-    pauseAfterLossesMs:   600_000,   // было 300000 → 10 мин вместо 5
+    // E: tighter loss control — pause 15 min after 3 consecutive losses
+    consecutiveLossesMax: 3,
+    pauseAfterLossesMs:   900_000,   // E: 600k→900k: 15 min cooldown (market needs time to shift)
 
     // ── Entry логика ─────────────────────────────────────────────────────────
     // pumpSwapInstantEntry: FALSE — "Balanced Battle Config" из документов.
@@ -126,8 +127,8 @@ export const config = {
     // Расширяем воронку: ранее 33 eligible, теперь ~100+ кошельков.
     copyTrade: {
       enabled:              true,
-      entryAmountSol:       0.08,    // tier 1 entry
-      tier2EntryAmountSol:  0.04,    // tier 2 entry (half)
+      entryAmountSol:       0.06,    // E: 0.08→0.06 tier 1 entry (aligned with 0.10 base)
+      tier2EntryAmountSol:  0.03,    // E: 0.04→0.03 tier 2 entry
       maxPositions:         3,
       minBuySolFromTracked: 0.25,
       slippageBps:          2000,
@@ -152,9 +153,9 @@ export const config = {
       entryAmountSol:    0.10,               // D3: 0.15→0.10 (saves ~1.5pp slippage, safer for 3-5 SOL bankroll)
       minEntryAmountSol: 0.05,               // 0.015→0.05: согласовано с новым entry
       minLiquiditySol:   0.04,
-      slippageBps:       2500,
+      slippageBps:       2000,               // E: 2500→2000: tighter slippage, rejects illiquid pools
       exit: {
-        entryStopLossPercent:          20,   // 25→20: быстрее режем losers (15 SOL/нед патч)
+        entryStopLossPercent:          18,   // E: 20→18: cut losers faster (saves ~0.2pp per trade)
         velocityDropPercent:           15,   // v3
         velocityWindowMs:              500,  // v3
         trailingActivationPercent:     25,
@@ -164,8 +165,8 @@ export const config = {
         hardStopPercent:               40,
         stagnationWindowMs:        35_000,
         stagnationMinMove:             0.08,
-        timeStopAfterMs:           60_000,   // 90k→60k: быстрее освобождаем слоты (15 SOL/нед патч)
-        timeStopMinPnl:               -0.05,
+        timeStopAfterMs:           45_000,   // E: 60k→45k: faster slot release for new opportunities
+        timeStopMinPnl:               -0.03,  // E: -0.05→-0.03: exit stale positions even with small loss
         breakEvenAfterTrailingPercent: -1.5,
         // ── Runner tail (15 SOL/нед патч P2) ──────────────────────────────
         // После достижения +runnerActivationPercent позиция переходит в режим
@@ -190,19 +191,19 @@ export const config = {
     // ── PumpSwap AMM ──────────────────────────────────────────────────────────
     pumpSwap: {
       entryAmountSol:        0.10,   // D3: 0.15→0.10 (saves ~1.5pp slippage)
-      minEntryAmountSol:     0.05,   // 0.015→0.05: согласовано с новым entry
+      minEntryAmountSol:     0.05,
       minLiquiditySol:       1,
-      slippageBps:           1800,
+      slippageBps:           1500,   // E: 1800→1500: tighter PumpSwap slippage
       maxReserveFraction:    0.15,
       exit: {
-        entryStopLossPercent:          20,
-        trailingActivationPercent:     35,
-        trailingDrawdownPercent:       18,
-        slowDrawdownPercent:           38,
+        entryStopLossPercent:          18,   // E: 20→18: cut losers faster
+        trailingActivationPercent:     30,   // E: 35→30: activate trailing earlier
+        trailingDrawdownPercent:       15,   // E: 18→15: protect gains tighter
+        slowDrawdownPercent:           35,   // E: 38→35
         slowDrawdownMinDurationMs:     1200,
-        velocityDropPercent:           16,
-        velocityWindowMs:              600,
-        hardStopPercent:               48,
+        velocityDropPercent:           14,   // E: 16→14: more sensitive to dumps
+        velocityWindowMs:              500,  // E: 600→500: faster velocity detection
+        hardStopPercent:               42,   // E: 48→42: tighter hard stop
         stagnationWindowMs:        240_000,
         stagnationMinMove:             0.07,
         timeStopAfterMs:           420_000,
@@ -237,10 +238,10 @@ export const config = {
       velocityDropPercent:           14,
       velocityWindowMs:              500,
       hardStopPercent:               45,
-      stagnationWindowMs:        180_000,
-      stagnationMinMove:             0.08,
-      timeStopAfterMs:           300_000,
-      timeStopMinPnl:               -0.07,
+      stagnationWindowMs:        120_000,   // E: 180k→120k: detect stagnation 2 min sooner
+      stagnationMinMove:             0.06,  // E: 0.08→0.06: more sensitive to flatline
+      timeStopAfterMs:           240_000,   // E: 300k→240k: 4 min time stop (was 5 min)
+      timeStopMinPnl:               -0.05,  // E: -0.07→-0.05: exit even with smaller loss
       breakEvenAfterTrailingPercent: -1.5,
       // D1: Mayhem TP ladder — sum=0.80, 20% runner reserve
       takeProfit: [
@@ -258,7 +259,7 @@ export const config = {
       entryAmountSol:    0.05,
       minEntryAmountSol: 0.015,
       minLiquiditySol:   0.04,
-      slippageBps:       2500,
+      slippageBps:       2000,   // E: 2500→2000
       exit: {
         entryStopLossPercent:          25,
         velocityDropPercent:           15,
