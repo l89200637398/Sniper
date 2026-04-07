@@ -1252,14 +1252,11 @@ export class Sniper {
       }
     }
 
-    // ── Rugcheck блокирует entry, social запускается в фоне (HISTORY_DEV_SNIPER) ─
-    // ОПТИМИЗИРОВАНО: social check (200-2000мс) НЕ блокирует вход.
-    // Social score определяет только entry multiplier (high/low) и add-on buy.
-    // Если social ещё не вернулся — входим с socialLowMultiplier, потом
-    // scheduleSocialRetry подберёт score и сделает add-on buy.
+    // C2+C5: Run rugcheck + social IN PARALLEL (both are network calls, 200-500ms each)
+    // Social is fire-and-forget; rugcheck blocks entry only if HIGH risk.
     {
-      // Запускаем social в фоне (fire-and-forget, результат подхватится позже)
-      checkSocialSignals(this.connection, mintPubkey)
+      // Start both checks concurrently
+      const socialPromise = checkSocialSignals(this.connection, mintPubkey)
         .then(social => {
           this.mintSocialScore.set(token.mint, social.score);
           (token as any)._socialScore = social.score;
@@ -1272,20 +1269,20 @@ export class Sniper {
           (token as any)._socialEntryMultiplier = config.strategy.socialLowMultiplier;
         });
 
-      // Rugcheck — единственный блокирующий check (200-500мс)
-      if (config.strategy.enableRugcheck) {
-        try {
-          const rugResult = await checkRugcheck(token.mint);
-          if (rugResult) {
-            (token as any)._rugcheckResult = rugResult;
-            if (rugResult.risk === 'high') {
-              logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
-              logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
-              return;
-            }
-            logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms)`);
-          }
-        } catch {}
+      const rugPromise = config.strategy.enableRugcheck
+        ? checkRugcheck(token.mint).catch(() => null)
+        : Promise.resolve(null);
+
+      // Await rugcheck (blocks entry for HIGH risk), social may still be running
+      const rugResult = await rugPromise;
+      if (rugResult) {
+        (token as any)._rugcheckResult = rugResult;
+        if (rugResult.risk === 'high') {
+          logger.warn(`🛑 Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
+          logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, fetchTimeMs: rugResult.fetchTimeMs });
+          return;
+        }
+        logger.debug(`[rugcheck] ${token.mint.slice(0,8)}: risk=${rugResult.risk} score=${rugResult.score} (${rugResult.fetchTimeMs}ms)`);
       }
 
       // Social ещё может не вернуться — используем дефолт
@@ -2550,19 +2547,7 @@ export class Sniper {
         return;
       }
 
-      // ── Rugcheck sync gate для PumpSwap ──
-      if (config.strategy.enableRugcheck) {
-        try {
-          const rugResult = await checkRugcheck(token.mint);
-          if (rugResult.risk === 'high') {
-            logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING ENTRY: ${token.mint.slice(0,8)} score=${rugResult.score} — ${rugResult.risks.join(', ')}`);
-            logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_instant' });
-            return;
-          }
-        } catch {
-          logger.debug(`[rugcheck] PumpSwap ${token.mint.slice(0,8)}: check failed, proceeding`);
-        }
-      }
+      // Duplicate rugcheck removed — already checked in Promise.all above
 
       logger.info(`⚡ PumpSwap INSTANT ENTRY: ${token.mint}`);
       logEvent('PUMP_SWAP_INSTANT_ENTRY', { mint: token.mint });
@@ -2650,19 +2635,7 @@ export class Sniper {
       return;
     }
 
-    // ── Rugcheck sync gate для PumpSwap buy-detected ──
-    if (config.strategy.enableRugcheck) {
-      try {
-        const rugResult = await checkRugcheck(buy.mint);
-        if (rugResult.risk === 'high') {
-          logger.warn(`🛑 PumpSwap Rugcheck HIGH RISK — BLOCKING: ${buy.mint.slice(0,8)} score=${rugResult.score}`);
-          logEvent('RUGCHECK_BLOCKED', { mint: buy.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_buy_detected' });
-          return;
-        }
-      } catch {
-        // timeout/error — proceed
-      }
-    }
+    // Duplicate rugcheck removed — already checked in Promise.all above
 
     try {
       const pumpSwapCfg = getStrategyForProtocol('pumpswap');
