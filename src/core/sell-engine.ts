@@ -36,7 +36,8 @@ export async function sellTokenAuto(
   cachedCreator?: PublicKey,       // из position.creator
   _cachedCashback?: boolean,       // из position.cashbackEnabled (hint)
   directRpc: boolean = false,      // ← НОВОЕ: bypass Jito, send via sendRawTransaction
-  useBloXroute: boolean = false    // ← NEW: разрешить fire-and-forget bloXroute (+0.001 SOL tip)
+  useBloXroute: boolean = false,   // ← NEW: разрешить fire-and-forget bloXroute (+0.001 SOL tip)
+  priorityFeeOverride?: number,    // brainstorm v4: escalated priority fee for retries
 ): Promise<string> {
   const state = getMintState(mint);
 
@@ -61,13 +62,13 @@ export async function sellTokenAuto(
   // ── PumpSwap path ─────────────────────────────────────────────────────────
   if (state.isPumpSwap) {
     logger.debug(`sellTokenAuto: ${mint.toBase58().slice(0, 8)}... → PumpSwap (native)${directRpc ? ' [direct RPC]' : ''}${useBloXroute ? ' +bx' : ''}`);
-    return sellTokenPumpSwap(connection, mint, payer, amountRaw, slippageBps, urgent, directRpc, useBloXroute);
+    return sellTokenPumpSwap(connection, mint, payer, amountRaw, slippageBps, urgent, directRpc, useBloXroute, priorityFeeOverride);
   }
 
   const migrated = await isMigrated(connection, mint);
   if (migrated) {
     logger.debug(`sellTokenAuto: ${mint.toBase58().slice(0, 8)}... → PumpSwap (migrated)${directRpc ? ' [direct RPC]' : ''}${useBloXroute ? ' +bx' : ''}`);
-    return sellTokenPumpSwap(connection, mint, payer, amountRaw, slippageBps, urgent, directRpc, useBloXroute);
+    return sellTokenPumpSwap(connection, mint, payer, amountRaw, slippageBps, urgent, directRpc, useBloXroute, priorityFeeOverride);
   }
 
   // ── Pump.fun bonding curve path ───────────────────────────────────────────
@@ -118,6 +119,6 @@ export async function sellTokenAuto(
 
   return sellToken(
     connection, mint, payer, creator, feeRecipient, EVENT_AUTHORITY,
-    amountRaw, minSolOut, urgent, mayhem, cashback, directRpc, useBloXroute
+    amountRaw, minSolOut, urgent, mayhem, cashback, directRpc, useBloXroute, priorityFeeOverride
   );
 }

@@ -7,6 +7,25 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/**
+ * Dynamic slippage: reduces slippage when entry is small relative to liquidity.
+ * formula: max(minFloorBps, maxSlippageBps × sqrt(entryAmountSol / liquiditySol))
+ * e.g. 0.15 SOL entry / 2 SOL liquidity → sqrt(0.075) ≈ 0.27 → 2500 × 0.27 = 688 bps
+ * Falls back to maxSlippageBps when liquidity data unavailable.
+ */
+export function computeDynamicSlippage(
+  entryAmountSol: number,
+  liquiditySol: number,
+  maxSlippageBps: number,
+  minFloorBps: number = 300,
+): number {
+  if (liquiditySol <= 0 || entryAmountSol <= 0) return maxSlippageBps;
+  const ratio = entryAmountSol / liquiditySol;
+  if (ratio >= 1) return maxSlippageBps;
+  const dynamic = Math.ceil(maxSlippageBps * Math.sqrt(ratio));
+  return Math.max(minFloorBps, Math.min(dynamic, maxSlippageBps));
+}
+
 export const config = {
   telegram: { botToken: requireEnv('BOT_TOKEN') },
   wallet: {
@@ -30,8 +49,8 @@ export const config = {
     tipAmountSol:      0.00003,    // было 0.000012 → слишком низкий, bundles не приземлялись
     maxTipAmountSol:   0.0001,     // было 0.00005 → потолок для retry escalation
     minTipAmountSol:   0.000015,   // было 0.000008
-    maxRetries:        5,          // было 2 → слишком мало, bundle не успевал приземлиться
-    tipIncreaseFactor: 1.3,        // было 1.2
+    maxRetries:        3,          // 5→3: меньше задержка (3×400ms=1.2с vs 5×400ms=2с), быстрее до maxTip
+    tipIncreaseFactor: 1.5,        // 1.3→1.5: агрессивнее растём к maxTip за 3 попытки
     burstCount:        1,
     burstTipMultipliers: [1.0],
     urgentMaxTipImmediate: true,   // dump-сигнал сразу идёт с maxTipAmountSol, без ramp
@@ -68,7 +87,7 @@ export const config = {
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
-    minTokenAgeMs:        150,       // было 50 → меньше same-block rugs
+    minTokenAgeMs:        400,       // 150→400: пропускаем bundled dev-buys, фильтруем same-block rugs
     disallowToken2022:    false,
 
     // ── Сетевые/Jito пороги ──────────────────────────────────────────────────
@@ -92,7 +111,7 @@ export const config = {
     minIndependentBuySol:  0.25,     // 0.15→0.25: только значимые входы (15 SOL/нед патч)
     waitForBuyerTimeoutMs: 3000,     // было 10000
     // earlyExitTimeoutMs: 800 — быстрый выход при слабых токенах
-    earlyExitTimeoutMs:    2000,     // было 800 → срезало profitable trades (HISTORY_DEV_SNIPER P0)
+    earlyExitTimeoutMs:    1500,     // 800→2000→1500: 2с = слишком долго при 0.15 entry, 1.5с — баланс
 
     // ── v3 Scoring ────────────────────────────────────────────────────────────
     // ВАЖНО: scoring при входе = только creatorRecentTokens (sync).
@@ -101,15 +120,16 @@ export const config = {
     minTokenScore:     50,           // 40→50: только A/A+ setups (15 SOL/нед патч)
     enableRugcheck:    true,
 
-    // ── Copy-Trade: CT-2 активирован ─────────────────────────────────────────
-    // Условия CT-2 выполнены: 33 eligible кошелька, WR > 65%.
-    // minWinRate поднят до 0.65 (было 0.55) — только проверенные.
-    // minTrades = 20 (было 5) — нужна история.
+    // ── Copy-Trade: 2-tier system (brainstorm v4) ──────────────────────────────
+    // Tier 1 (conservative): WR≥60%, ≥15 trades → полный вход
+    // Tier 2 (aggressive):   WR≥50%, ≥8 trades  → половина входа
+    // Расширяем воронку: ранее 33 eligible, теперь ~100+ кошельков.
     copyTrade: {
-      enabled:              true,    // было false → CT-2 активируем
-      entryAmountSol:       0.08,    // было 0.03 → масштабируем (proven-edge канал)
-      maxPositions:         3,       // 1→3 (15 SOL/нед P2): eligible кошельки имеют WR>65%
-      minBuySolFromTracked: 0.25,    // было 0.15 — только значимые входы
+      enabled:              true,
+      entryAmountSol:       0.08,    // tier 1 entry
+      tier2EntryAmountSol:  0.04,    // tier 2 entry (half)
+      maxPositions:         3,
+      minBuySolFromTracked: 0.25,
       slippageBps:          2000,
     },
 
@@ -353,13 +373,18 @@ export const config = {
     },
   },
 
-  // ─── Wallet Tracker ─────────────────────────────────────────────────────────
-  // Пороги подняты под CT-2: minWinRate 0.65, minCompletedTrades 20.
+  // ─── Wallet Tracker (2-tier, brainstorm v4) ─────────────────────────────────
+  // Tier 1: WR≥60%, ≥15 trades → conservative, полный вход
+  // Tier 2: WR≥50%, ≥8 trades  → aggressive, половина входа
   walletTracker: {
-    minCompletedTrades:    20,          // было 5 → нужна история
-    minWinRate:            0.65,        // было 0.55 → только сильные кошельки
+    // Tier 1 (isCopyEligible)
+    minCompletedTrades:    15,          // 20→15: расширяем воронку
+    minWinRate:            0.60,        // 0.65→0.60: больше eligible кошельков
+    // Tier 2 (isCopyEligibleTier2)
+    tier2MinCompletedTrades: 8,
+    tier2MinWinRate:         0.50,
     maxTrackedWallets:     2000,
-    minCopyBuySolLamports: 150_000_000, // 0.15 SOL (было 0.10)
+    minCopyBuySolLamports: 150_000_000, // 0.15 SOL
     saveIntervalMs:        300_000,
   },
 
@@ -376,6 +401,6 @@ export const config = {
     pendingBuyTimeoutMs:         10000,
     confirmTransactionTimeoutMs: 30000,
     optimisticPositionTtlMs:     60000,
-    confirmIntervalMs:           800,    // было 200 → bundle не успевал приземлиться за 200ms
+    confirmIntervalMs:           400,    // было 800 → 400ms компромисс: bundle приземляется за 200-600ms
   },
 };

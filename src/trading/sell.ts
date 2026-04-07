@@ -155,7 +155,8 @@ export async function sellToken(
   isMayhem: boolean = false,
   cashbackEnabled: boolean = false,
   directRpc: boolean = false,      // ← НОВОЕ: bypass Jito, send via sendRawTransaction
-  useBloXroute: boolean = false    // ← gate: bloXroute разрешён только на последней попытке sniper'а
+  useBloXroute: boolean = false,   // ← gate: bloXroute разрешён только на последней попытке sniper'а
+  priorityFeeOverride?: number,    // brainstorm v4: escalated priority fee
 ): Promise<string> {
   const owner = payer.publicKey;
   const mintState = getMintState(mint);
@@ -174,7 +175,7 @@ export async function sellToken(
     isMayhem, cashbackEnabled
   );
 
-  const priorityFee = getCachedPriorityFee();
+  const priorityFee = priorityFeeOverride ?? getCachedPriorityFee();
 
   const buildTx = async (includeBloXrouteTip: boolean = false): Promise<VersionedTransaction> => {
     const blockhash = await getCachedBlockhash();

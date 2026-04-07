@@ -5,7 +5,7 @@ import { Mutex } from 'async-mutex';
 import bs58 from 'bs58';
 import fs from 'fs/promises';
 import path from 'path';
-import { config } from '../config';
+import { config, computeDynamicSlippage } from '../config';
 import {
   buildBuyInstructionFromCreate,
   getFeeRecipient,
@@ -58,7 +58,7 @@ import { queueJitoSend } from '../infra/jito-queue';
 import { withRetry } from '../utils/retry';
 import { withRpcLimit } from '../utils/rpc-limiter';
 import { getRuntimeLayout } from '../runtime-layout';
-import { sellTokenJupiter } from '../trading/jupiter-sell';
+import { sellTokenJupiter, getJupiterQuote, sellTokenJupiterWithQuote } from '../trading/jupiter-sell';
 import { detectProtocol } from './detector';
 import { WalletTracker } from './wallet-tracker';
 import { scoreToken, TokenFeatures } from '../utils/token-scorer';
@@ -90,6 +90,7 @@ interface PendingBuy {
   adjustedEntryAmountSol?: number;
   independentBuyersSeen: Set<string>;
   independentBuyersNeeded: number;
+  aggregatedBuyVolumeSol: number;  // brainstorm v4: total SOL from independent buyers
 }
 
 export class Sniper {
@@ -113,6 +114,9 @@ export class Sniper {
   private isCheckingPositions = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
   private feeRecipient: PublicKey | null = null;
+  private cachedFeeRecipient: PublicKey | null = null;
+  private cachedFeeRecipientTs: number = 0;
+  private static readonly FEE_RECIPIENT_CACHE_TTL = 5_000; // 5 sec
   private eventAuthority: PublicKey;
   private global: PublicKey;
 
@@ -131,12 +135,16 @@ export class Sniper {
   private readonly TRADE_QUALITY_WINDOW   = 10; // последние N сделок
 
   private mayhemPending: Map<string, { token: PumpToken; timer: NodeJS.Timeout }> = new Map();
+  // Jupiter pre-warm cache (brainstorm v4): quote cached per mint
+  private jupiterQuoteCache: Map<string, { quote: any; fetchedAt: number }> = new Map();
+  private static readonly JUP_QUOTE_TTL = 5_000; // 5s TTL for pre-warmed quotes
 
   private createdATAs: Set<string> = new Set();
 
   private pendingBuysMutex = new Mutex();
   private seenMutex = new Mutex();
   private partialSellingMutex = new Mutex();
+  private sellingMutex = new Mutex();
   private resendMutex = new Mutex();
 
   private reservesCache: Map<string, { reserves: any; timestamp: number }> = new Map();
@@ -384,11 +392,15 @@ export class Sniper {
       const position = this.positions.get(mintStr);
       if (!position) continue;
 
-      if (this.sellingMints.has(mintStr)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(mintStr)) return false;
+        this.sellingMints.add(mintStr);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Skip duplicate sell ${mintStr}`);
         continue;
       }
-      this.sellingMints.add(mintStr);
 
       const promise = (async () => {
         try {
@@ -600,8 +612,12 @@ export class Sniper {
 
   private async closeStalePosition(position: Position): Promise<void> {
     const mintStr = position.mint.toBase58();
-    if (this.sellingMints.has(mintStr)) return;
-    this.sellingMints.add(mintStr);
+    const acquired = await this.sellingMutex.runExclusive(() => {
+      if (this.sellingMints.has(mintStr)) return false;
+      this.sellingMints.add(mintStr);
+      return true;
+    });
+    if (!acquired) return;
     try {
       const amountRaw = BigInt(Math.floor(position.amount * 10 ** position.tokenDecimals));
       const txId = await sellTokenAuto(
@@ -832,7 +848,12 @@ export class Sniper {
 
   private async evaluateAndActOnDecision(position: Position, mintStr: string, decision: SellDecision) {
     if (decision.action === 'full') {
-      if (this.sellingMints.has(mintStr)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(mintStr)) return false;
+        this.sellingMints.add(mintStr);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Skip duplicate sell ${mintStr}`);
         return;
       }
@@ -846,7 +867,12 @@ export class Sniper {
         logEvent('TP_OVERRIDE_FULL_SELL', { mint: mintStr, originalPortion: decision.portion, tpLevel: decision.tpLevelPercent, socialScore });
         decision.action = 'full';
         decision.reason = 'tp_all';
-        if (this.sellingMints.has(mintStr)) {
+        const acquired = await this.sellingMutex.runExclusive(() => {
+          if (this.sellingMints.has(mintStr)) return false;
+          this.sellingMints.add(mintStr);
+          return true;
+        });
+        if (!acquired) {
           logger.debug(`Skip duplicate sell ${mintStr}`);
           return;
         }
@@ -894,20 +920,27 @@ export class Sniper {
     if (!isSelfWallet) {
       this.walletTracker.recordBuy(buyer, mint, Number(buy.solLamports));
 
-      // ── v3: Copy-trade signal → EXEC (HISTORY_DEV_SNIPER) ──
-      if (config.strategy.copyTrade.enabled &&
+      // ── v3: Copy-trade signal → EXEC (2-tier, brainstorm v4) ──
+      const ctSignal = config.strategy.copyTrade.enabled &&
           !this.positions.has(mint) && !this.pendingBuys.has(mint) &&
-          this.walletTracker.isCopySignal(buyer, Number(buy.solLamports)) &&
-          this.positions.size < config.strategy.maxPositions) {
+          this.positions.size < config.strategy.maxPositions
+          ? this.walletTracker.isCopySignal(buyer, Number(buy.solLamports))
+          : { signal: false as const };
+
+      if (ctSignal.signal) {
         if (this.copyTradeCount >= config.strategy.copyTrade.maxPositions) {
           logger.debug(`CT skip: already ${this.copyTradeCount} CT position(s)`);
         } else {
-          const totalExposure = [...this.positions.values()].reduce((s, p) => s + p.entryAmountSol, 0);
-          if (totalExposure + config.strategy.copyTrade.entryAmountSol <= config.strategy.maxTotalExposureSol) {
-            logger.info(`🎯 COPY-TRADE EXEC: ${buyer.slice(0,8)} bought ${mint.slice(0,8)} for ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL`);
-            logEvent('COPY_TRADE_EXEC', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports) });
+          // Tier-based entry amount
+          const ctEntryAmount = ctSignal.tier === 1
+            ? config.strategy.copyTrade.entryAmountSol
+            : ((config.strategy.copyTrade as any).tier2EntryAmountSol ?? config.strategy.copyTrade.entryAmountSol * 0.5);
 
-            // bondingCurve детерминированно вычисляем из mint (PDA)
+          const totalExposure = [...this.positions.values()].reduce((s, p) => s + p.entryAmountSol, 0);
+          if (totalExposure + ctEntryAmount <= config.strategy.maxTotalExposureSol) {
+            logger.info(`🎯 COPY-TRADE T${ctSignal.tier} EXEC: ${buyer.slice(0,8)} bought ${mint.slice(0,8)} for ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL, entry=${ctEntryAmount}`);
+            logEvent('COPY_TRADE_EXEC', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports), tier: ctSignal.tier, entryAmount: ctEntryAmount });
+
             const ctMintPk = new PublicKey(mint);
             const ctBondingCurve = getBondingCurvePDA(ctMintPk);
 
@@ -920,11 +953,8 @@ export class Sniper {
               receivedAt: Date.now(),
             };
 
-            // _socialEntryMultiplier управляет суммой входа в executePendingBuy:
-            //   adjustedEntry = pumpFun.entryAmountSol * multiplier
-            // Нам нужен copyTrade.entryAmountSol (0.03) → multiplier = 0.03 / 0.05 = 0.6
             (ctToken as any)._socialEntryMultiplier =
-              config.strategy.copyTrade.entryAmountSol / config.strategy.pumpFun.entryAmountSol;
+              ctEntryAmount / config.strategy.pumpFun.entryAmountSol;
 
             this.copyTradeMints.add(mint);
 
@@ -1013,21 +1043,23 @@ export class Sniper {
 
         if (isIndependent) {
           p.independentBuyersSeen.add(buyer);
+          p.aggregatedBuyVolumeSol += Number(buy.solLamports) / 1e9;
           const seen = p.independentBuyersSeen.size;
           const needed = p.independentBuyersNeeded;
-          logger.info(`👤 Real buyer ${seen}/${needed} for ${mint.slice(0,8)}: ${buyer.slice(0,8)} spent ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL`);
-          logEvent('INDEPENDENT_BUYER', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports), seen, needed });
+          logger.info(`👤 Real buyer ${seen}/${needed} for ${mint.slice(0,8)}: ${buyer.slice(0,8)} spent ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL (total=${p.aggregatedBuyVolumeSol.toFixed(4)})`);
+          logEvent('INDEPENDENT_BUYER', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports), seen, needed, aggVolume: p.aggregatedBuyVolumeSol });
 
-          // ── HISTORY_DEV_SNIPER: Fast entry for large buyer ────────────────
-          // Если кто-то вложил ≥0.3 SOL — это сильный сигнал реального спроса,
-          // не нужно ждать второго independent buyer.
+          // ── Fast entry: large single buyer OR strong aggregated volume ──
+          // Single buyer ≥0.3 SOL = strong demand signal.
+          // Aggregated ≥0.5 SOL from 2+ wallets = organic demand (brainstorm v4).
           const isLargeBuy = buy.solLamports >= 300_000_000n; // 0.3 SOL
-          if (isLargeBuy && seen < needed) {
-            logger.info(`⚡ FAST ENTRY: Large buyer ${buyer.slice(0,8)} spent ${(Number(buy.solLamports)/1e9).toFixed(4)} SOL → skipping wait`);
-            logEvent('FAST_ENTRY_LARGE_BUYER', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports) });
+          const isStrongVolume = seen >= 2 && p.aggregatedBuyVolumeSol >= 0.5;
+          if ((isLargeBuy || isStrongVolume) && seen < needed) {
+            logger.info(`⚡ FAST ENTRY: ${isLargeBuy ? 'Large buyer' : 'Strong volume'} ${buyer.slice(0,8)} → skipping wait (vol=${p.aggregatedBuyVolumeSol.toFixed(4)}, buyers=${seen})`);
+            logEvent('FAST_ENTRY', { mint, buyer: buyer.slice(0,8), solLamports: Number(buy.solLamports), reason: isLargeBuy ? 'large_buyer' : 'agg_volume', aggVolume: p.aggregatedBuyVolumeSol });
           }
 
-          if (seen >= needed || isLargeBuy) {
+          if (seen >= needed || isLargeBuy || isStrongVolume) {
             clearTimeout(p.timer);
             this.pendingBuys.delete(mint);
             return p;
@@ -1335,6 +1367,7 @@ export class Sniper {
         adjustedEntryAmountSol: isWaitingForIndependent ? undefined : undefined,
         independentBuyersSeen: new Set(),
         independentBuyersNeeded: isWaitingForIndependent ? 1 : 0,
+        aggregatedBuyVolumeSol: 0,
       });
     });
 
@@ -1846,6 +1879,9 @@ export class Sniper {
         this.payer.publicKey, ata, this.payer.publicKey, mintPubkey, mintState.tokenProgramId
       );
 
+      const liquiditySol = Number(freshData.virtualSolReserves) / 1e9;
+      const dynSlippage = computeDynamicSlippage(adjustedEntryAmountSol, liquiditySol, pumpFunCfg.slippageBps);
+
       const buyIx = buildBuyInstructionFromCreate({
         mint:                 mintPubkey,
         bondingCurve,
@@ -1853,7 +1889,7 @@ export class Sniper {
         userAta:              ata,
         user:                 this.payer.publicKey,
         amountSol:            adjustedEntryAmountSol,
-        slippageBps:          pumpFunCfg.slippageBps,
+        slippageBps:          dynSlippage,
         virtualSolReserves:   freshData.virtualSolReserves,
         virtualTokenReserves: freshData.virtualTokenReserves,
         feeRecipient:         getEffectiveFeeRecipient(freshData.data, this.feeRecipient!),
@@ -1886,7 +1922,9 @@ export class Sniper {
         type: 'normal',
         socialMultiplier,
         adjustedEntryAmountSol,
-        slippageBps: pumpFunCfg.slippageBps,
+        slippageBps: dynSlippage,
+        maxSlippageBps: pumpFunCfg.slippageBps,
+        liquiditySol,
         virtualSolReserves: freshData.virtualSolReserves.toString(),
         virtualTokenReserves: freshData.virtualTokenReserves.toString(),
       });
@@ -2037,22 +2075,44 @@ export class Sniper {
                     // ─── НОВОЕ: для токенов score=0 запускаем таймер раннего выхода ───
                     const socialScore = this.mintSocialScore.get(token.mint) ?? 0;
                     if (socialScore === 0 && !this.earlyExitTimers.has(token.mint) && !this.sellingMints.has(token.mint)) {
+                      // Дифференцированный таймаут: socialLow (0.03 SOL) — 1000ms,
+                      // full entry (0.15 SOL) — earlyExitTimeoutMs (1500ms).
+                      // При socialLow рисковать 1.5с нет смысла — ранний выход дешёвый.
+                      const isSocialLow = position.entryAmountSol <= pumpFunCfg.entryAmountSol * config.strategy.socialLowMultiplier * 1.1;
+                      const earlyTimeout = isSocialLow ? Math.min(1000, config.strategy.earlyExitTimeoutMs) : config.strategy.earlyExitTimeoutMs;
                       const exitTimer = setTimeout(async () => {
-                        logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${config.strategy.earlyExitTimeoutMs}ms — exiting position`);
-                        logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint });
+                        logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${earlyTimeout}ms — exiting position`);
+                        logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint, timeoutMs: earlyTimeout, socialLow: isSocialLow });
                         const pos = this.positions.get(token.mint);
                         if (pos && !this.sellingMints.has(token.mint)) {
                           await this.executeFullSell(pos, token.mint, { action: 'full', reason: 'early_exit', urgent: true });
                         }
                         this.earlyExitTimers.delete(token.mint);
-                      }, config.strategy.earlyExitTimeoutMs);
+                      }, earlyTimeout);
                       this.earlyExitTimers.set(token.mint, exitTimer);
-                      logger.info(`⏱️ Early exit timer started (${config.strategy.earlyExitTimeoutMs}ms) for ${token.mint.slice(0,8)}`);
+                      logger.info(`⏱️ Early exit timer started (${earlyTimeout}ms, socialLow=${isSocialLow}) for ${token.mint.slice(0,8)}`);
                     }
 
                     // ADDED LOG: POSITION_CONFIRMED_SCORE
                     const rugResult = (token as any)._rugcheckResult;
                     const realBuyers = this.confirmedRealBuyers.get(token.mint);
+
+                    // Holder concentration check (brainstorm v4): fetch top holders
+                    let topHolderPct: number | undefined;
+                    try {
+                      const largest = await withRpcLimit(() =>
+                        this.connection.getTokenLargestAccounts(new PublicKey(token.mint))
+                      );
+                      if (largest.value.length > 0) {
+                        const totalKnown = largest.value.reduce((s, a) => s + Number(a.amount), 0);
+                        if (totalKnown > 0) {
+                          topHolderPct = (Number(largest.value[0].amount) / totalKnown) * 100;
+                        }
+                      }
+                    } catch {
+                      // non-critical, scoring works without it
+                    }
+
                     const features: TokenFeatures = {
                       socialScore,
                       independentBuyers: realBuyers?.size ?? 0,
@@ -2063,6 +2123,7 @@ export class Sniper {
                       hasMintAuthority: rugResult?.hasMintAuthority ?? false,
                       hasFreezeAuthority: rugResult?.hasFreezeAuthority ?? false,
                       isMayhem: getMintState(position.mint).isMayhemMode ?? false,
+                      topHolderPct,
                     };
                     const scoringResult = scoreToken(features, this.getEffectiveMinScore());
                     logEvent('POSITION_CONFIRMED_SCORE', {
@@ -2225,17 +2286,19 @@ export class Sniper {
 
                   const socialScore = this.mintSocialScore.get(token.mint) ?? 0;
                   if (socialScore === 0 && !this.earlyExitTimers.has(token.mint) && !this.sellingMints.has(token.mint)) {
+                    const isSocialLow2 = position.entryAmountSol <= pumpFunCfg.entryAmountSol * config.strategy.socialLowMultiplier * 1.1;
+                    const earlyTimeout2 = isSocialLow2 ? Math.min(1000, config.strategy.earlyExitTimeoutMs) : config.strategy.earlyExitTimeoutMs;
                     const exitTimer = setTimeout(async () => {
-                      logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${config.strategy.earlyExitTimeoutMs}ms — exiting position`);
-                      logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint });
+                      logger.warn(`⏰ No independent buyer for ${token.mint.slice(0,8)} within ${earlyTimeout2}ms — exiting position`);
+                      logEvent('EARLY_EXIT_TIMEOUT', { mint: token.mint, timeoutMs: earlyTimeout2, socialLow: isSocialLow2 });
                       const pos = this.positions.get(token.mint);
                       if (pos && !this.sellingMints.has(token.mint)) {
                         await this.executeFullSell(pos, token.mint, { action: 'full', reason: 'early_exit', urgent: true });
                       }
                       this.earlyExitTimers.delete(token.mint);
-                    }, config.strategy.earlyExitTimeoutMs);
+                    }, earlyTimeout2);
                     this.earlyExitTimers.set(token.mint, exitTimer);
-                    logger.info(`⏱️ Early exit timer started (${config.strategy.earlyExitTimeoutMs}ms) for ${token.mint.slice(0,8)}`);
+                    logger.info(`⏱️ Early exit timer started (${earlyTimeout2}ms, socialLow=${isSocialLow2}) for ${token.mint.slice(0,8)}`);
                   }
                 }
                 return true;
@@ -2945,15 +3008,17 @@ export class Sniper {
 
       this.creatorSellSeen.add(sell.mint);
 
-      if (this.sellingMints.has(sell.mint)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(sell.mint)) return false;
+        this.sellingMints.add(sell.mint);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Creator sell: already selling ${sell.mint.slice(0,8)}`);
         return;
       }
 
-      this.sellingMints.add(sell.mint);
-
       // Non-blocking: не ждём завершения sell, gRPC events продолжают обрабатываться.
-      // sellingMints уже защищает от повторных sell-ов. (HISTORY_DEV_SNIPER)
       this.executeFullSell(position, sell.mint, {
         action: 'full',
         reason: 'creator_sell',
@@ -2982,12 +3047,15 @@ export class Sniper {
 
       this.creatorSellSeen.add(sell.mint);
 
-      if (this.sellingMints.has(sell.mint)) {
+      const acquired = await this.sellingMutex.runExclusive(() => {
+        if (this.sellingMints.has(sell.mint)) return false;
+        this.sellingMints.add(sell.mint);
+        return true;
+      });
+      if (!acquired) {
         logger.debug(`Creator sell: already selling ${sell.mint.slice(0,8)}`);
         return;
       }
-
-      this.sellingMints.add(sell.mint);
 
       // Non-blocking: не ждём завершения sell (HISTORY_DEV_SNIPER)
       this.executeFullSell(position, sell.mint, {
@@ -3228,14 +3296,23 @@ export class Sniper {
   }
 
   private startMonitoring() {
-    if (this.monitoringInterval) clearInterval(this.monitoringInterval);
-    this.monitoringInterval = setInterval(() => this.checkPositions(), 400);
-    logger.info('Position monitoring started (interval 400ms)');
+    if (this.monitoringInterval) clearTimeout(this.monitoringInterval);
+    // 600ms base + random jitter 0-200ms = 600-800ms effective.
+    // Stagger внутри checkPositions (50ms между позициями) снижает RPC burst.
+    // При 4 позициях: 4 × getAccountInfo за 600-800ms = ~5-6 req/s вместо 10 req/s.
+    const scheduleNext = () => {
+      const jitter = Math.floor(Math.random() * 200);
+      this.monitoringInterval = setTimeout(() => {
+        this.checkPositions().finally(scheduleNext);
+      }, 600 + jitter);
+    };
+    scheduleNext();
+    logger.info('Position monitoring started (interval 600-800ms with jitter)');
   }
 
   private stopMonitoring() {
     if (this.monitoringInterval) {
-      clearInterval(this.monitoringInterval);
+      clearTimeout(this.monitoringInterval);
       this.monitoringInterval = null;
       logger.info('Position monitoring stopped');
     }
@@ -3246,19 +3323,104 @@ export class Sniper {
     this.isCheckingPositions = true;
     try {
       const keys = Array.from(this.positions.keys());
-      await Promise.all(keys.map(async mintStr => {
+      if (keys.length === 0) return;
+
+      // ── Batch RPC: собираем все нужные аккаунты и делаем 1 getMultipleAccounts ──
+      // Вместо N sequential getAccountInfo/getTokenAccountBalance = 1 batch RPC call.
+      const accountKeys: PublicKey[] = [];
+      const accountMap: { mintStr: string; type: string; idx: number }[] = [];
+
+      for (const mintStr of keys) {
         const position = this.positions.get(mintStr);
-        if (!position) return;
+        if (!position) continue;
+
+        if (position.protocol === 'pump.fun' || position.protocol === 'mayhem') {
+          const bc = getBondingCurvePDA(position.mint);
+          accountMap.push({ mintStr, type: 'pump_bc', idx: accountKeys.length });
+          accountKeys.push(bc);
+        } else if (position.protocol === 'pumpswap') {
+          const state = getMintState(position.mint);
+          if (state.poolBaseTokenAccount && state.poolQuoteTokenAccount) {
+            accountMap.push({ mintStr, type: 'swap_base', idx: accountKeys.length });
+            accountKeys.push(state.poolBaseTokenAccount);
+            accountMap.push({ mintStr, type: 'swap_quote', idx: accountKeys.length });
+            accountKeys.push(state.poolQuoteTokenAccount);
+          }
+        } else if (position.protocol === 'raydium-launch') {
+          const state = getMintState(position.mint);
+          if (state.raydiumPool) {
+            accountMap.push({ mintStr, type: 'ray_launch', idx: accountKeys.length });
+            accountKeys.push(state.raydiumPool);
+          }
+        } else if (position.protocol === 'raydium-cpmm' || position.protocol === 'raydium-ammv4') {
+          // CPMM/AMMv4 need pool + 2 vault balances = 3 accounts; fall back to sequential
+          accountMap.push({ mintStr, type: 'ray_fallback', idx: -1 });
+        }
+      }
+
+      // One batch RPC call for all positions
+      let batchResults: (import('@solana/web3.js').AccountInfo<Buffer> | null)[] = [];
+      if (accountKeys.length > 0) {
         try {
-          if (position.protocol === 'pump.fun' || position.protocol === 'mayhem') {
-            try {
-              const reserves = await this.getPoolReserves(position.mint);
-              position.updatePrice(Number(reserves.virtualSolReserves), Number(reserves.virtualTokenReserves));
+          batchResults = await withRpcLimit(() =>
+            this.connection.getMultipleAccountsInfo(accountKeys, { commitment: 'processed' })
+          );
+        } catch (err) {
+          logger.warn('Batch getMultipleAccounts failed, falling back to sequential', err);
+          // Fall back to sequential on error
+          batchResults = new Array(accountKeys.length).fill(null);
+        }
+      }
+
+      // ── Parse results per position ──
+      const swapBaseByMint = new Map<string, bigint>();
+      const swapQuoteByMint = new Map<string, bigint>();
+
+      for (const entry of accountMap) {
+        const position = this.positions.get(entry.mintStr);
+        if (!position) continue;
+
+        try {
+          if (entry.type === 'pump_bc') {
+            const accInfo = batchResults[entry.idx];
+            if (!accInfo) { position.updateErrors++; continue; }
+            const layout = getRuntimeLayout();
+            const tokenOffset = layout.bondingCurve?.tokenReserveOffset ?? 8;
+            const solOffset = layout.bondingCurve?.solReserveOffset ?? 16;
+            const vSol = accInfo.data.readBigUInt64LE(solOffset);
+            const vToken = accInfo.data.readBigUInt64LE(tokenOffset);
+            position.updatePrice(Number(vSol), Number(vToken));
+            position.updateErrors = 0;
+          } else if (entry.type === 'swap_base') {
+            const accInfo = batchResults[entry.idx];
+            if (accInfo && accInfo.data.length >= 72) {
+              swapBaseByMint.set(entry.mintStr, accInfo.data.readBigUInt64LE(64));
+            }
+          } else if (entry.type === 'swap_quote') {
+            const accInfo = batchResults[entry.idx];
+            if (accInfo && accInfo.data.length >= 72) {
+              swapQuoteByMint.set(entry.mintStr, accInfo.data.readBigUInt64LE(64));
+            }
+            // Now we have both base and quote for this PumpSwap position
+            const base = swapBaseByMint.get(entry.mintStr);
+            const quote = swapQuoteByMint.get(entry.mintStr);
+            if (base !== undefined && quote !== undefined) {
+              position.updatePrice(Number(quote), Number(base));
               position.updateErrors = 0;
-            } catch {
+            } else {
               position.updateErrors++;
             }
-          } else if (position.protocol === 'raydium-launch' || position.protocol === 'raydium-cpmm' || position.protocol === 'raydium-ammv4') {
+          } else if (entry.type === 'ray_launch') {
+            const accInfo = batchResults[entry.idx];
+            if (accInfo) {
+              const pool = parseLaunchLabPool(accInfo.data);
+              position.updatePrice(Number(pool.virtualB), Number(pool.virtualA));
+              position.updateErrors = 0;
+            } else {
+              position.updateErrors++;
+            }
+          } else if (entry.type === 'ray_fallback') {
+            // Sequential fallback for CPMM/AMMv4 (need vault balances)
             try {
               const reserves = await this.getRaydiumReserves(position);
               if (reserves) {
@@ -3270,37 +3432,52 @@ export class Sniper {
             } catch {
               position.updateErrors++;
             }
-          } else {
-            const reserves = await this.getPumpSwapReserves(position.mint);
-            if (reserves) {
-              position.updatePrice(Number(reserves.quoteReserve), Number(reserves.baseReserve));
-              position.updateErrors = 0;
-            } else {
-              position.updateErrors++;
-            }
-          }
-
-          if (position.updateErrors > 5) {
-            setImmediate(() => {
-              this.executeFullSell(position, mintStr, { action: 'full', reason: 'rpc_error', urgent: false });
-            });
-            return;
-          }
-
-          logger.debug(
-            `${mintStr}: price=${position.currentPrice.toFixed(12)} pnl=${position.pnlPercent.toFixed(1)}% max=${position.maxPrice.toFixed(12)}`
-          );
-
-          const decision = position.shouldSell(logger);
-          if (decision.action !== 'none') {
-            setImmediate(() => {
-              this.evaluateAndActOnDecision(position, mintStr, decision);
-            });
           }
         } catch (err) {
-          logger.error(`Error checking position ${mintStr}:`, err);
+          position.updateErrors++;
+          logger.debug(`Error parsing batch result for ${entry.mintStr}:`, err);
         }
-      }));
+      }
+
+      // ── Evaluate sell decisions ──
+      for (const mintStr of keys) {
+        const position = this.positions.get(mintStr);
+        if (!position) continue;
+
+        if (position.updateErrors > 5) {
+          setImmediate(() => {
+            this.executeFullSell(position, mintStr, { action: 'full', reason: 'rpc_error', urgent: false });
+          });
+          continue;
+        }
+
+        logger.debug(
+          `${mintStr}: price=${position.currentPrice.toFixed(12)} pnl=${position.pnlPercent.toFixed(1)}% max=${position.maxPrice.toFixed(12)}`
+        );
+
+        // ── Jupiter pre-warm (brainstorm v4): speculatively fetch quote ──
+        // When PnL > 50% or position age > 30s, pre-warm Jupiter quote in background.
+        // This saves 1-2s when Jupiter fallback is needed after all sell attempts fail.
+        const cached = this.jupiterQuoteCache.get(mintStr);
+        const needsWarm = !cached || Date.now() - cached.fetchedAt > Sniper.JUP_QUOTE_TTL;
+        if (needsWarm && (position.pnlPercent > 50 || Date.now() - position.openedAt > 30_000)) {
+          const tokenAmount = BigInt(Math.floor(position.amount * 10 ** position.tokenDecimals));
+          if (tokenAmount > 0n) {
+            getJupiterQuote(mintStr, tokenAmount).then(result => {
+              if (result) {
+                this.jupiterQuoteCache.set(mintStr, { quote: result.quoteResponse, fetchedAt: Date.now() });
+              }
+            }).catch(() => {}); // fire-and-forget
+          }
+        }
+
+        const decision = position.shouldSell(logger);
+        if (decision.action !== 'none') {
+          setImmediate(() => {
+            this.evaluateAndActOnDecision(position, mintStr, decision);
+          });
+        }
+      }
     } finally {
       this.isCheckingPositions = false;
     }
@@ -3332,6 +3509,7 @@ export class Sniper {
             this.emitTradeClose(position, mintStr, '', decision.reason ?? 'ata_empty', decision.urgent ?? false, 0, closedAt);
             this.totalTrades++;
             this.consecutiveLosses++;
+            this.recordTradeResult(false); // FIX: ATA empty = loss для defensive mode
             this.positions.delete(mintStr);
             this.copyTradeMints.delete(mintStr);
             this.sellFailureCount.delete(mintStr);
@@ -3366,6 +3544,7 @@ export class Sniper {
         this.emitTradeClose(position, mintStr, '', (decision.reason ?? 'rpc_error') as CloseReason, decision.urgent ?? false, 0, closedAt);
         this.totalTrades++;
         this.consecutiveLosses++;
+        this.recordTradeResult(false); // FIX: ATA failed = loss для defensive mode
         this.positions.delete(mintStr);
         this.copyTradeMints.delete(mintStr);
         this.sellFailureCount.delete(mintStr);
@@ -3376,11 +3555,12 @@ export class Sniper {
 
       logEvent('SELL_ATTEMPT', { mint: mintStr, amount: position.amount, reason: decision.reason, urgent: decision.urgent });
 
-      // ── Sell loop: до 4 попыток, batch status check (HISTORY_DEV_SNIPER) ──
-      // ОПТИМИЗИРОВАНО: delay 300ms (было 400), flat (не растущий),
-      // batch getSignatureStatuses для ВСЕХ отправленных txId за один RPC call
+      // ── Sell loop: до 4 попыток, adaptive polling (brainstorm v4) ──
+      // Вместо фиксированных 500ms: поллим каждые 100ms до maxWait.
+      // Jito landing = 200-400ms, directRpc = 50-150ms.
       const MAX_SELL_ATTEMPTS = 4;
-      const SELL_CONFIRM_DELAY_MS = 300;
+      const POLL_INTERVAL_MS = 100;
+      const getMaxWait = (attempt: number) => attempt === 0 ? 600 : 400; // Jito = 600ms, directRpc = 400ms
 
       // bloXroute только как последнее средство + процентный кэп
       const bxTipSol = config.bloxroute.tipLamports / 1e9;
@@ -3396,6 +3576,7 @@ export class Sniper {
       let sellSuccess = false; // true только если TX confirmed AND err === null
       let lastTxId = '';
       const allSentTxIds: string[] = []; // для batch status check
+      const basePriorityFee = getCachedPriorityFee();
 
       for (let attempt = 0; attempt < MAX_SELL_ATTEMPTS; attempt++) {
         // ADDED LOG: SELL_ATTEMPT_DETAIL before sending
@@ -3410,17 +3591,23 @@ export class Sniper {
           reason: decision.reason,
         });
         try {
-          // FIX feeRecipient: при retry (attempt > 0) перечитываем из Global
+          // FIX feeRecipient: cached with 5s TTL (brainstorm v4)
+          // Не дёргаем RPC внутри retry loop — используем кэш.
           let feeRecipient: PublicKey | undefined;
           if (attempt === 0 && position.feeRecipientUsed) {
             feeRecipient = new PublicKey(position.feeRecipientUsed);
           } else {
-            // Свежий feeRecipient из Global account — не используем кэш
-            try {
-              feeRecipient = await getFeeRecipient(this.connection);
-              logger.debug(`Fresh feeRecipient for sell retry ${attempt}: ${feeRecipient.toBase58().slice(0,8)}`);
-            } catch {
-              feeRecipient = this.feeRecipient ?? undefined;
+            const now = Date.now();
+            if (this.cachedFeeRecipient && now - this.cachedFeeRecipientTs < Sniper.FEE_RECIPIENT_CACHE_TTL) {
+              feeRecipient = this.cachedFeeRecipient;
+            } else {
+              try {
+                feeRecipient = await getFeeRecipient(this.connection);
+                this.cachedFeeRecipient = feeRecipient;
+                this.cachedFeeRecipientTs = now;
+              } catch {
+                feeRecipient = this.cachedFeeRecipient ?? this.feeRecipient ?? undefined;
+              }
             }
           }
 
@@ -3428,6 +3615,13 @@ export class Sniper {
           // bloXroute разрешён только на финальной попытке и только если tip <5% от выхода
           const useBloXrouteNow = useDirectRpc && bxAllowedByCost && attempt >= config.bloxroute.minAttemptIdx;
           sellPath = !useDirectRpc ? 'jito' : (useBloXrouteNow ? 'direct+bx' : 'direct');
+          // Priority fee escalation: ×1.5 per retry (brainstorm v4)
+          const escalatedPriorityFee = attempt === 0
+            ? undefined  // use default from cache
+            : Math.min(
+                Math.ceil(basePriorityFee * Math.pow(config.jito.tipIncreaseFactor, attempt)),
+                config.compute.unitPriceMicroLamports * 5  // cap at 5× base
+              );
           const txId = await sellTokenAuto(
             this.connection,
             position.mint,
@@ -3441,37 +3635,34 @@ export class Sniper {
             position.cashbackEnabled,
             useDirectRpc,
             useBloXrouteNow,
+            escalatedPriorityFee,
           );
           lastTxId = txId;
           allSentTxIds.push(txId);
 
-          // ── Batch status check: проверяем ВСЕ ранее отправленные TX одним вызовом ──
-          // Экономим RPC calls и ловим TX которые приземлились позже.
-          await new Promise(r => setTimeout(r, SELL_CONFIRM_DELAY_MS));
-          const statuses = await this.connection.getSignatureStatuses(allSentTxIds);
-
-          for (let i = 0; i < allSentTxIds.length; i++) {
-            const status = statuses.value[i];
-            if (status?.confirmationStatus && !status.err) {
-              confirmedTxId = allSentTxIds[i];
-              sellSuccess = true;
-              logger.info(`Sell confirmed (attempt ${attempt+1}, tx #${i+1}, path=${sellPath}): ${confirmedTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
-              logEvent('SELL_PATH_CONFIRMED', { mint: mintStr, path: sellPath, attempt: attempt+1 });
-              metrics.inc(`sell_path_${sellPath.replace(/[^a-z]/g,'_')}_ok`);
-              break;
+          // ── Adaptive polling: проверяем каждые 100ms вместо фиксированных 500ms ──
+          const maxWait = getMaxWait(attempt);
+          let elapsed = 0;
+          while (elapsed < maxWait && !sellSuccess) {
+            await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+            elapsed += POLL_INTERVAL_MS;
+            const statuses = await this.connection.getSignatureStatuses(allSentTxIds);
+            for (let i = 0; i < allSentTxIds.length; i++) {
+              const status = statuses.value[i];
+              if (status?.confirmationStatus && !status.err) {
+                confirmedTxId = allSentTxIds[i];
+                sellSuccess = true;
+                logger.info(`Sell confirmed (attempt ${attempt+1}, tx #${i+1}, path=${sellPath}, ${elapsed}ms): ${confirmedTxId.slice(0,8)} for ${mintStr.slice(0,8)}`);
+                logEvent('SELL_PATH_CONFIRMED', { mint: mintStr, path: sellPath, attempt: attempt+1, pollMs: elapsed });
+                metrics.inc(`sell_path_${sellPath.replace(/[^a-z]/g,'_')}_ok`);
+                break;
+              }
             }
           }
           if (sellSuccess) break;
 
-          // Детальный лог для текущей TX
-          const currentStatus = statuses.value[statuses.value.length - 1];
-          if (!currentStatus?.confirmationStatus) {
-            logger.info(`Sell attempt ${attempt+1}/${MAX_SELL_ATTEMPTS} not confirmed yet for ${mintStr.slice(0,8)}`);
-            logEvent('SELL_NOT_CONFIRMED', { mint: mintStr, attempt: attempt + 1, txId: txId.slice(0,8) });
-          } else if (currentStatus.err) {
-            logger.warn(`Sell attempt ${attempt+1} reverted on-chain: ${JSON.stringify(currentStatus.err)} for ${mintStr.slice(0,8)}`);
-            logEvent('SELL_REVERTED_STATUS', { mint: mintStr, attempt: attempt + 1, err: JSON.stringify(currentStatus.err) });
-          }
+          logger.info(`Sell attempt ${attempt+1}/${MAX_SELL_ATTEMPTS} not confirmed after ${maxWait}ms for ${mintStr.slice(0,8)}`);
+          logEvent('SELL_NOT_CONFIRMED', { mint: mintStr, attempt: attempt + 1, txId: txId.slice(0,8), pollMs: maxWait });
         } catch (err) {
           logger.warn(`Sell attempt ${attempt+1} exception for ${mintStr.slice(0,8)}:`, err);
         }
@@ -3505,21 +3696,22 @@ export class Sniper {
           }
         } catch {}
 
-        // ── Jupiter sell fallback (HISTORY_DEV_SNIPER) ─────────────────────────
+        // ── Jupiter sell fallback (brainstorm v4: pre-warmed) ────────────────
         // Jupiter находит маршрут через любой DEX, даже если пул мигрировал.
-        // Это решает проблему SELL_ALL_FAILED.
+        // Если есть pre-warmed quote — используем его (экономит 1-2s).
         try {
-          logger.info(`🔄 Jupiter fallback sell for ${mintStr.slice(0,8)}...`);
-          logEvent('JUPITER_SELL_ATTEMPT', { mint: mintStr, amount: realAmountRaw.toString(), reason: decision.reason });
-
           const jupSlippage = Math.min(5000, getStrategyForProtocol(position.protocol).slippageBps * 3);
-          const jupTxId = await sellTokenJupiter(
-            this.connection,
-            mintStr,
-            this.payer,
-            realAmountRaw,
-            jupSlippage,
-          );
+          const preWarmed = this.jupiterQuoteCache.get(mintStr);
+          const usePreWarmed = preWarmed && Date.now() - preWarmed.fetchedAt < Sniper.JUP_QUOTE_TTL;
+
+          logger.info(`🔄 Jupiter fallback sell for ${mintStr.slice(0,8)}...${usePreWarmed ? ' (pre-warmed)' : ''}`);
+          logEvent('JUPITER_SELL_ATTEMPT', { mint: mintStr, amount: realAmountRaw.toString(), reason: decision.reason, preWarmed: !!usePreWarmed });
+
+          const jupTxId = usePreWarmed
+            ? await sellTokenJupiterWithQuote(this.connection, mintStr, this.payer, realAmountRaw, preWarmed!.quote, jupSlippage)
+            : await sellTokenJupiter(this.connection, mintStr, this.payer, realAmountRaw, jupSlippage);
+
+          this.jupiterQuoteCache.delete(mintStr); // used, clear cache
 
           // Ждём подтверждения (Jupiter обеспечивает быстрый landing)
           await new Promise(r => setTimeout(r, 1000));
@@ -3563,6 +3755,7 @@ export class Sniper {
         this.emitTradeClose(position, mintStr, lastTxId, (decision.reason ?? 'rpc_error') as CloseReason, decision.urgent ?? false, 0, closedAt);
         this.totalTrades++;
         this.consecutiveLosses++;
+        this.recordTradeResult(false); // FIX: force-close = loss, defensive mode должен это видеть
         if (config.strategy.consecutiveLossesMax && this.consecutiveLosses >= config.strategy.consecutiveLossesMax) {
           logger.warn(`❗ ${this.consecutiveLosses} consecutive losses, pausing buys for ${config.strategy.pauseAfterLossesMs / 60000} min`);
           this.pauseUntil = Date.now() + config.strategy.pauseAfterLossesMs;
@@ -3699,6 +3892,19 @@ export class Sniper {
         const socialScore = this.mintSocialScore.get(mintStr) ?? 0;
         const rugResult = (position as any)._rugcheckResult;
         const realBuyers = this.confirmedRealBuyers.get(mintStr);
+
+        // Holder concentration for add-on scoring
+        let topHolderPct: number | undefined;
+        try {
+          const largest = await withRpcLimit(() =>
+            this.connection.getTokenLargestAccounts(mintPk)
+          );
+          if (largest.value.length > 0) {
+            const totalKnown = largest.value.reduce((s, a) => s + Number(a.amount), 0);
+            if (totalKnown > 0) topHolderPct = (Number(largest.value[0].amount) / totalKnown) * 100;
+          }
+        } catch { /* non-critical */ }
+
         const features: TokenFeatures = {
           socialScore,
           independentBuyers: realBuyers?.size ?? 0,
@@ -3709,6 +3915,7 @@ export class Sniper {
           hasMintAuthority: rugResult?.hasMintAuthority ?? false,
           hasFreezeAuthority: rugResult?.hasFreezeAuthority ?? false,
           isMayhem: getMintState(mintPk).isMayhemMode ?? false,
+          topHolderPct,
         };
         const effMinScore = this.getEffectiveMinScore();
         const scoringResult = scoreToken(features, effMinScore);

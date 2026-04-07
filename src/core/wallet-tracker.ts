@@ -28,7 +28,9 @@ interface WalletStats {
   completedTrades: number;
   wins: number;
   lastSeen: number;
-  isCopyEligible: boolean;
+  isCopyEligible: boolean;       // tier 1 (conservative)
+  isCopyEligibleTier2: boolean;  // tier 2 (aggressive, half entry)
+  recentLosses: number;          // consecutive recent losses (для state tracking)
 }
 
 export class WalletTracker {
@@ -39,14 +41,18 @@ export class WalletTracker {
   private readonly MAX_TRADES_PER_WALLET = 20;
   private readonly MIN_COMPLETED: number;
   private readonly MIN_WIN_RATE: number;
+  private readonly TIER2_MIN_COMPLETED: number;
+  private readonly TIER2_MIN_WIN_RATE: number;
   private readonly SAVE_INTERVAL: number;
   private readonly MIN_COPY_SOL: number;
 
   constructor() {
     const wt = config.walletTracker ?? {} as any;
     this.MAX_WALLETS = wt.maxTrackedWallets ?? 2000;
-    this.MIN_COMPLETED = wt.minCompletedTrades ?? 5;
-    this.MIN_WIN_RATE = wt.minWinRate ?? 0.55;
+    this.MIN_COMPLETED = wt.minCompletedTrades ?? 15;
+    this.MIN_WIN_RATE = wt.minWinRate ?? 0.60;
+    this.TIER2_MIN_COMPLETED = wt.tier2MinCompletedTrades ?? 8;
+    this.TIER2_MIN_WIN_RATE = wt.tier2MinWinRate ?? 0.50;
     this.SAVE_INTERVAL = wt.saveIntervalMs ?? 5 * 60 * 1000;
     this.MIN_COPY_SOL = wt.minCopyBuySolLamports ?? 100_000_000;
   }
@@ -73,6 +79,7 @@ export class WalletTracker {
       stats = {
         address: wallet, trades: [], completedTrades: 0,
         wins: 0, lastSeen: Date.now(), isCopyEligible: false,
+        isCopyEligibleTier2: false, recentLosses: 0,
       };
       this.wallets.set(wallet, stats);
     }
@@ -99,39 +106,63 @@ export class WalletTracker {
     stats.completedTrades++;
 
     // ── PnL-based win detection (HISTORY_DEV_SNIPER) ─────────────────────────
-    // Если есть данные о SOL полученных при продаже — сравниваем с SOL потраченными при покупке.
-    // Если sell SOL > buy SOL → win (кошелёк в плюсе).
-    // Если нет данных о sell SOL (sellSolLamports=0) — fallback на holdTime:
-    //   holdTime 5-120 сек = likely win, <5 сек = instant dump, >120 сек = stuck.
+    let isWin = false;
     if (sellSolLamports > 0 && trade.buySolLamports > 0) {
-      if (sellSolLamports > trade.buySolLamports * 0.98) {
-        stats.wins++;
-      }
+      isWin = sellSolLamports > trade.buySolLamports * 0.98;
     } else {
-      // Без sellSolLamports опираемся на holdTime. Сужено 4-90 сек:
-      // <4 сек = instant dump / front-run, >90 сек = stuck/bag holder.
       const holdTime = Date.now() - trade.buyTimestamp;
-      if (holdTime > 4000 && holdTime < 90_000) stats.wins++;
+      isWin = holdTime > 4000 && holdTime < 90_000;
+    }
+
+    if (isWin) {
+      stats.wins++;
+      stats.recentLosses = 0;
+    } else {
+      stats.recentLosses++;
     }
     stats.lastSeen = Date.now();
 
-    // Пересчитать eligible статус
+    // Пересчитать eligible статус (2-tier)
     const wasEligible = stats.isCopyEligible;
+    const wasTier2 = stats.isCopyEligibleTier2;
     const winRate = stats.completedTrades > 0 ? stats.wins / stats.completedTrades : 0;
+
+    // Tier 1 (conservative): high WR + long history
     stats.isCopyEligible = stats.completedTrades >= this.MIN_COMPLETED && winRate >= this.MIN_WIN_RATE;
+    // Tier 2 (aggressive): lower thresholds, half entry
+    stats.isCopyEligibleTier2 = !stats.isCopyEligible &&
+      stats.completedTrades >= this.TIER2_MIN_COMPLETED && winRate >= this.TIER2_MIN_WIN_RATE;
 
     if (!wasEligible && stats.isCopyEligible) {
-      logger.info(`🎯 COPY-ELIGIBLE: ${wallet.slice(0, 8)}... WR=${(winRate * 100).toFixed(0)}% trades=${stats.completedTrades}`);
-      logEvent('WALLET_ELIGIBLE', { wallet: wallet.slice(0, 8), winRate: +(winRate.toFixed(2)), trades: stats.completedTrades });
+      logger.info(`🎯 COPY-ELIGIBLE T1: ${wallet.slice(0, 8)}... WR=${(winRate * 100).toFixed(0)}% trades=${stats.completedTrades}`);
+      logEvent('WALLET_ELIGIBLE', { wallet: wallet.slice(0, 8), tier: 1, winRate: +(winRate.toFixed(2)), trades: stats.completedTrades });
+    } else if (!wasTier2 && stats.isCopyEligibleTier2) {
+      logger.info(`🎯 COPY-ELIGIBLE T2: ${wallet.slice(0, 8)}... WR=${(winRate * 100).toFixed(0)}% trades=${stats.completedTrades}`);
+      logEvent('WALLET_ELIGIBLE', { wallet: wallet.slice(0, 8), tier: 2, winRate: +(winRate.toFixed(2)), trades: stats.completedTrades });
     }
     this.dirty = true;
   }
 
-  /** Проверить, является ли покупка copy-trade сигналом */
-  isCopySignal(wallet: string, solLamports: number): boolean {
+  /** Проверить, является ли покупка copy-trade сигналом.
+   *  Returns: { signal: true, tier: 1|2 } или { signal: false }
+   *  Tier 2 wallets с 3+ consecutive losses = skip (loss streak filter).
+   */
+  isCopySignal(wallet: string, solLamports: number): { signal: boolean; tier?: 1 | 2 } {
     const stats = this.wallets.get(wallet);
-    if (!stats || !stats.isCopyEligible) return false;
-    return solLamports >= this.MIN_COPY_SOL;
+    if (!stats) return { signal: false };
+    if (solLamports < this.MIN_COPY_SOL) return { signal: false };
+
+    if (stats.isCopyEligible) {
+      // Tier 1: skip only if 5+ consecutive losses (severe drawdown)
+      if (stats.recentLosses >= 5) return { signal: false };
+      return { signal: true, tier: 1 };
+    }
+    if (stats.isCopyEligibleTier2) {
+      // Tier 2: skip if 3+ consecutive losses
+      if (stats.recentLosses >= 3) return { signal: false };
+      return { signal: true, tier: 2 };
+    }
+    return { signal: false };
   }
 
   /** Очистка старых данных (вызывается из cleanSeenMints раз в час) */
@@ -143,7 +174,7 @@ export class WalletTracker {
       // Удалить незавершённые trades старше 10 минут
       stats.trades = stats.trades.filter(t => t.sold || now - t.buyTimestamp < 10 * 60 * 1000);
       // Удалить неактивные кошельки (eligible тоже, но с бОльшим TTL)
-      const ttl = stats.isCopyEligible ? ELIGIBLE_INACTIVE_TTL : INACTIVE_TTL;
+      const ttl = (stats.isCopyEligible || stats.isCopyEligibleTier2) ? ELIGIBLE_INACTIVE_TTL : INACTIVE_TTL;
       if (now - stats.lastSeen > ttl) {
         if (stats.isCopyEligible) {
           logger.info(`🗑️ Eligible wallet ${addr.slice(0,8)} inactive for 7d — removing`);
@@ -157,7 +188,7 @@ export class WalletTracker {
     let oldest: string | null = null;
     let oldestTime = Infinity;
     for (const [addr, stats] of this.wallets) {
-      if (stats.isCopyEligible) continue; // не вытесняем eligible
+      if (stats.isCopyEligible || stats.isCopyEligibleTier2) continue; // не вытесняем eligible
       if (stats.lastSeen < oldestTime) { oldestTime = stats.lastSeen; oldest = addr; }
     }
     if (oldest) this.wallets.delete(oldest);
@@ -168,13 +199,15 @@ export class WalletTracker {
     try {
       // Сохраняем только кошельки с >= 2 trades или eligible
       const data = [...this.wallets.values()]
-        .filter(s => s.completedTrades >= 2 || s.isCopyEligible)
+        .filter(s => s.completedTrades >= 2 || s.isCopyEligible || s.isCopyEligibleTier2)
         .map(s => ({
           address: s.address,
           completedTrades: s.completedTrades,
           wins: s.wins,
           lastSeen: s.lastSeen,
           isCopyEligible: s.isCopyEligible,
+          isCopyEligibleTier2: s.isCopyEligibleTier2,
+          recentLosses: s.recentLosses,
         }));
       await fs.mkdir(path.dirname(TRACKER_FILE), { recursive: true });
       await fs.writeFile(TRACKER_FILE, JSON.stringify(data, null, 2), 'utf8');
@@ -195,6 +228,8 @@ export class WalletTracker {
           wins: item.wins ?? 0,
           lastSeen: item.lastSeen ?? 0,
           isCopyEligible: item.isCopyEligible ?? false,
+          isCopyEligibleTier2: item.isCopyEligibleTier2 ?? false,
+          recentLosses: item.recentLosses ?? 0,
         });
       }
     } catch (err) {
