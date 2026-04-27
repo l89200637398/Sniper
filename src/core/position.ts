@@ -270,7 +270,10 @@ export class Position {
       return { action: 'full', reason: 'hard_stop', urgent: false };
     }
 
-    // 3. Velocity drop
+    // 3. Velocity drop (wider threshold in runner mode — let runners breathe)
+    const effVelocityDropPct = this.runnerTailActivated
+      ? exit.velocityDropPercent * 1.5  // 50% wider in runner mode
+      : exit.velocityDropPercent;
     const phCount = this.priceHistoryFull ? MAX_PRICE_HISTORY : this.priceHistoryIdx;
     if (phCount > 1) {
       const windowEdge = now - exit.velocityWindowMs;
@@ -285,7 +288,7 @@ export class Position {
       }
       if (refTick && refTick.p > 0) {
         const velocityChange = (this.currentPrice - refTick.p) / refTick.p;
-        if (velocityChange <= -exit.velocityDropPercent / 100) {
+        if (velocityChange <= -effVelocityDropPct / 100) {
           logger.debug(`[${mintStr}] velocity_drop: change=${velocityChange}, threshold=-${exit.velocityDropPercent/100}`);
           logEvent('SHOULD_SELL_TRIGGER', {
             mint: mintStr,
@@ -334,7 +337,7 @@ export class Position {
     }
 
     // 5. Take profit (BEFORE stagnation — TP must fire before flat-exit kills a winner)
-    const isMicroPosition = this.entryAmountSol < 0.05;
+    const isMicroPosition = this.entryAmountSol < 0.03;
     for (const level of this.takeProfitLevels) {
       if (this.levelsReached.has(level.levelPercent) && !this.takenLevels.has(level.levelPercent) && !this.pendingTpLevels.has(level.levelPercent)) {
         const microFullExit = isMicroPosition && this.takenLevelsCount >= 1;

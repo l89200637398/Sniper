@@ -88,17 +88,34 @@ export async function runEntryPipeline(input: PipelineInput): Promise<PipelineRe
     } : null;
 
     if (rugcheckResult && rugcheckResult.risk === 'high') {
-      return makeSkip('rugcheck_high_risk', {
-        risk: rugcheckResult.risk,
-        score: rugcheckResult.score,
-        risks: rugcheckResult.risks,
-      }, diagnostics, { safetyResult, rugcheckResult, socialScore });
+      // PumpSwap tokens already survived bonding curve (85 SOL liquidity proven).
+      // Only block on critical risks (honeypot, freeze); allow the rest.
+      const isMigrated = protocol === 'pumpswap';
+      const hasCriticalRisk = rugcheckResult.risks.some(r =>
+        r.includes('HONEYPOT') || r.includes('freeze_authority'),
+      );
+
+      if (!isMigrated || hasCriticalRisk) {
+        return makeSkip('rugcheck_high_risk', {
+          risk: rugcheckResult.risk,
+          score: rugcheckResult.score,
+          risks: rugcheckResult.risks,
+        }, diagnostics, { safetyResult, rugcheckResult, socialScore });
+      }
+      logger.debug(`[pipeline] PumpSwap ${mint.slice(0, 8)}: rugcheck=high but no critical risks, allowing`);
     }
 
     if (!safetyResult.safe) {
-      return makeSkip('safety_failed', { reason: safetyResult.reason }, diagnostics, {
-        safetyResult, rugcheckResult, socialScore,
-      });
+      // AMM tokens (PumpSwap/CPMM/AMM v4) already have proven liquidity.
+      // Only block on freeze_authority for AMM protocols; skip mintAuthority check.
+      const isAmmProtocol = ['pumpswap', 'raydium-cpmm', 'raydium-ammv4'].includes(protocol);
+      const isFreezeIssue = safetyResult.reason?.includes('Freeze authority');
+      if (!isAmmProtocol || isFreezeIssue) {
+        return makeSkip('safety_failed', { reason: safetyResult.reason }, diagnostics, {
+          safetyResult, rugcheckResult, socialScore,
+        });
+      }
+      logger.debug(`[pipeline] ${protocol} ${mint.slice(0, 8)}: safety=${safetyResult.reason}, allowing AMM token`);
     }
 
     // Score token for diagnostics — NOT as a blocking gate.

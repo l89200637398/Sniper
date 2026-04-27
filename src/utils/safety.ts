@@ -34,15 +34,18 @@ export async function isTokenSafe(connection: Connection, mint: PublicKey): Prom
       return { safe: false, reason: `Unknown token program: ${programId}` };
     }
 
-    const PUMPFUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
-    const RAYDIUM_LAUNCHLAB = 'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj';
+    const SAFE_MINT_AUTHORITIES = new Set([
+      '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',  // pump.fun
+      'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj',  // Raydium LaunchLab
+      'TSLvdd1pWpHVjahSpUsoiQqeCcRMmANu21HzqCL555R',   // Token-2022 Transfer Hook Authority (common)
+    ]);
 
     const mintInfo = await connection.getParsedAccountInfo(mint);
     const parsed = (mintInfo.value?.data as any)?.parsed?.info;
     if (parsed) {
       if (parsed.mintAuthority) {
         const auth = parsed.mintAuthority as string;
-        if (auth !== PUMPFUN_PROGRAM && auth !== RAYDIUM_LAUNCHLAB) {
+        if (!SAFE_MINT_AUTHORITIES.has(auth)) {
           return { safe: false, reason: `Mint authority present: ${auth.slice(0, 8)}` };
         }
       }

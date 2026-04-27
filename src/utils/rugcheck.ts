@@ -154,7 +154,7 @@ export async function checkRugcheck(mint: string): Promise<RugcheckResult> {
         risks, fetchTimeMs: Date.now() - t0,
       };
 
-      logger.debug(`[rugcheck] ${mint.slice(0, 8)}: risk=${risk} score=${riskScore} (${result.fetchTimeMs}ms)`);
+      logger.debug(`[rugcheck] ${mint.slice(0, 8)}: risk=${risk} score=${riskScore} risks=[${risks.join(',')}] (${result.fetchTimeMs}ms)`);
       return cacheAndReturn(mint, result);
     } catch (err) {
       lastErr = err;
