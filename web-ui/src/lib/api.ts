@@ -102,6 +102,17 @@ export const api = {
         lastTimestamp: number;
       }>
     >('GET', `/social/mentions?window=${windowMs}&limit=${limit}`),
+  // Log export
+  pushLogsToGit: () =>
+    request<{ ok: boolean; message?: string; files?: string[]; error?: string }>(
+      'POST',
+      '/logs/push-to-git',
+    ),
+  getLogPushStatus: () =>
+    request<{ inProgress: boolean; lastExportTs: number; lastExportIso: string | null }>(
+      'GET',
+      '/logs/push-status',
+    ),
   // Token quality
   getRecentTokens: () =>
     request<{ tokens: ScoredToken[] }>('GET', '/tokens/recent'),

@@ -10,6 +10,7 @@ import { blacklistRouter } from './blacklist';
 import { socialRouter } from './social';
 import { preLaunchRouter } from './prelaunch';
 import { tokensRouter } from './tokens';
+import { logsRouter } from './logs';
 
 export function registerRoutes(app: Express, sniper: Sniper) {
   app.use('/api/control', controlRouter(sniper));
@@ -22,4 +23,5 @@ export function registerRoutes(app: Express, sniper: Sniper) {
   app.use('/api/social', socialRouter(sniper));
   app.use('/api/prelaunch', preLaunchRouter(sniper));
   app.use('/api/tokens', tokensRouter(sniper));
+  app.use('/api/logs', logsRouter());
 }

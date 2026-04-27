@@ -6,6 +6,43 @@ import { PositionCard } from '../components/PositionCard';
 import { SystemStatus } from '../components/SystemStatus';
 import { PnLChart } from '../components/PnLChart';
 
+function PushLogsButton() {
+  const [pushing, setPushing] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const handlePush = useCallback(async () => {
+    setPushing(true);
+    setResult(null);
+    try {
+      const data = await api.pushLogsToGit();
+      setResult({ ok: data.ok, message: data.message ?? (data.ok ? 'Done' : (data.error ?? 'Error')) });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ ok: false, message: msg });
+    } finally {
+      setPushing(false);
+      setTimeout(() => setResult(null), 6000);
+    }
+  }, []);
+
+  return (
+    <div className="flex items-center gap-2">
+      {result && (
+        <span className={`text-xs ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+          {result.message}
+        </span>
+      )}
+      <button
+        onClick={handlePush}
+        disabled={pushing}
+        className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm transition disabled:opacity-50"
+      >
+        {pushing ? 'Pushing...' : 'Push Logs'}
+      </button>
+    </div>
+  );
+}
+
 interface Trade {
   mint?: string;
   protocol?: string;
@@ -166,7 +203,8 @@ export function Dashboard() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
         <h1 className="text-2xl font-bold">Dashboard</h1>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center flex-wrap">
+          <PushLogsButton />
           {isRunning
             ? <button onClick={() => api.stop()} className="px-4 py-2 bg-red-600 rounded-lg text-sm hover:bg-red-500 transition">Stop Bot</button>
             : <button onClick={() => api.start()} className="px-4 py-2 bg-green-600 rounded-lg text-sm hover:bg-green-500 transition">Start Bot</button>
