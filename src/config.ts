@@ -116,7 +116,7 @@ export const config = {
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
     maxPositions:         12,        // 10→12: +2 scalp slots for established pools
-    maxPumpFunPositions:  1,         // 3→1: risky bonding curve, strict filter
+    maxPumpFunPositions:  2,         // 3→2: risky bonding curve, strict filters, анонсированные токены
     maxPumpSwapPositions: 5,         // PumpSwap best +EV protocol
     maxTotalExposureSol:  3.5,       // 3.0→3.5: headroom for scalp positions
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
@@ -241,6 +241,7 @@ export const config = {
       enabled:     true,
       timeoutMs:   30_000,
       minAgeMs:    10_000,
+      scalpTimeoutMs: 45_000,       // scalp: exit after 45s silence (buy activity stopped)
       protocolTimeouts: {
         'pump.fun':        25_000,
         'pumpswap':        60_000,
@@ -453,7 +454,7 @@ export const config = {
     pumpSwapMaxReserveFraction: 0.2,
 
     // ── Raydium LaunchLab (bonding curve) ─────────────────────────────────
-    maxRaydiumLaunchPositions: 1,     // 2→1: risky bonding curve, strict filter
+    maxRaydiumLaunchPositions: 2,     // risky bonding curve, strict filters
     raydiumLaunch: {
       entryAmountSol:    0.08,       // 0.05→0.08: overhead 25% (was 40%)
       minEntryAmountSol: 0.04,
@@ -558,33 +559,34 @@ export const config = {
 
     // ── Scalping Mode (established high-liquidity pools) ────────────────────
     // Activated for CPMM/AMM v4 pools with SOL reserve > scalpLiquidityThresholdSol.
-    // Tight TP, tight stops, quick in/out — even +10% is a good scalp trade.
+    // Strategy: enter on confirmed slow trend, hold while buy pressure > sell pressure,
+    // exit when momentum fades. Tight TP, moderate stagnation, volume-aware.
     scalpLiquidityThresholdSol: 50,    // pools above this = scalp mode
     scalping: {
       entryAmountSol:    0.12,         // higher stake: lower risk on established pools
       minEntryAmountSol: 0.08,
       exit: {
         entryStopLossPercent:          5,     // tight SL — established pools shouldn't dip much
-        velocityDropPercent:           10,    // any significant drop = exit
-        velocityWindowMs:              3000,  // 7-8 blocks, sustained drops only
-        trailingActivationPercent:     8,     // activate trailing early — lock in quick gains
-        trailingDrawdownPercent:       3,     // very tight trailing — scalp mode
-        slowDrawdownPercent:           12,
-        slowDrawdownMinDurationMs:     2000,
-        hardStopPercent:               15,    // tight hard stop
-        stagnationWindowMs:        60_000,    // 1 min flatline = exit
-        stagnationMinMove:             0.02,  // very sensitive to stagnation
-        timeStopAfterMs:           120_000,   // 2 min max hold — scalp, not hold
-        timeStopMinPnl:               -0.01,  // quick cut if not moving
-        breakEvenAfterTrailingPercent:  0.5,  // very tight break-even
-        runnerActivationPercent:       25,    // runner at 25% (rare for established pools)
-        runnerTrailDrawdownPercent:    8,     // tight runner trailing
-        runnerHardStopPercent:         15,    // tight runner hard stop
+        velocityDropPercent:           8,     // meaningful drop = exit (10→8: ликвидные пулы не дипают резко без причины)
+        velocityWindowMs:              5000,  // 12 blocks — sustained drops only, filter single-block noise
+        trailingActivationPercent:     6,     // activate trailing at +6% — earlier than TP2
+        trailingDrawdownPercent:       3,     // tight trailing — scalp mode
+        slowDrawdownPercent:           10,
+        slowDrawdownMinDurationMs:     3000,  // 3s sustained decline
+        hardStopPercent:               12,    // tight hard stop (15→12: на ликвидных пулах -12% это серьёзно)
+        stagnationWindowMs:        180_000,   // 3 min stagnation (60s→180s: ликвидные пулы двигаются медленно)
+        stagnationMinMove:             0.01,  // 1% min movement (2%→1%: даже +0.5%/мин = нормально)
+        timeStopAfterMs:           300_000,   // 5 min max hold (2→5: даём время медленному тренду)
+        timeStopMinPnl:               -0.01,  // quick cut if negative after 5 min
+        breakEvenAfterTrailingPercent:  0.5,  // tight break-even after trailing
+        runnerActivationPercent:       20,    // runner at +20% (rare for established pools)
+        runnerTrailDrawdownPercent:    6,     // runner trailing
+        runnerHardStopPercent:         12,    // runner hard stop
         takeProfit: [
-          { levelPercent:   5, portion: 0.35 },   // TP1: quick cost recovery at +5%
-          { levelPercent:  10, portion: 0.30 },   // TP2: lock gains at +10%
-          { levelPercent:  20, portion: 0.20 },   // TP3: near-full exit at +20%
-          { levelPercent:  40, portion: 0.10 },   // TP4: 5% runner remains
+          { levelPercent:   3, portion: 0.30 },   // TP1: cost recovery at +3% (covers fees+slippage)
+          { levelPercent:   8, portion: 0.30 },   // TP2: solid profit at +8%
+          { levelPercent:  15, portion: 0.25 },   // TP3: strong move at +15%
+          { levelPercent:  30, portion: 0.10 },   // TP4: 5% runner remains
         ],
       },
     },
