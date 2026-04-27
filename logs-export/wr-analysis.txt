@@ -29,16 +29,16 @@ break_even               1      1.9   91.8         1
 section                 
 ------------------------
 ══ TREND_SKIP REASONS ══
-reason              protocol  count
-------------------  --------  -----
-rugcheck_high_risk  pumpswap  3391 
-safety_failed       pump.fun  1118 
+reason              protocol      count
+------------------  ------------  -----
+rugcheck_high_risk  pump.fun      4515 
+safety_failed       raydium-cpmm  1147 
 section                
 -----------------------
 ══ ВОРОНКА КОНВЕРСИИ ══
 stage            count
 ---------------  -----
-TREND_SKIP       4509 
+TREND_SKIP       5662 
 TREND_TRACKED    0    
 TREND_CONFIRMED  0    
 BUY_SENT         0    
@@ -49,9 +49,9 @@ section
 ══ SOCIAL SIGNALS ══
 source       signals  unique_mints  alpha_signals
 -----------  -------  ------------  -------------
-telegram     3073     481           0            
-dexscreener  553      306           0            
-twitter      153      46            0            
+telegram     3282     534           0            
+dexscreener  581      327           0            
+twitter      165      51            0            
 section                   
 --------------------------
 ══ SOCIAL → TRADE MATCH ══
@@ -97,41 +97,42 @@ section
 ══ EVENT TYPES ══
 type                           count
 -----------------------------  -----
-WALLET_ELIGIBLE                7068 
-TREND_SKIP                     4509 
-SHADOW_RAYDIUM_AMMV4_RECOVERY  2911 
-PRICE_TICK                     2338 
-SHADOW_RAYDIUM_CPMM_RECOVERY   1373 
-TREND_TIMEOUT                  802  
-SHOULD_SELL_TRIGGER            738  
-SHADOW_PARTIAL_SELL            488  
-TREND_CONFIRMED                418  
-SHADOW_TREND_CONFIRMED         408  
-SHADOW_BUY                     264  
-SHADOW_SELL                    253  
-TX_DIAGNOSTIC                  187  
-SHADOW_SIMULATION              185  
-SHADOW_SOCIAL_DISCOVERY        182  
-SHADOW_PUMPSWAP_INSTANT        112  
+WALLET_ELIGIBLE                8822 
+TREND_SKIP                     5662 
+PRICE_TICK                     3842 
+SHADOW_RAYDIUM_AMMV4_RECOVERY  3458 
+SHADOW_RAYDIUM_CPMM_RECOVERY   1593 
+TREND_TIMEOUT                  1239 
+SHOULD_SELL_TRIGGER            915  
+TREND_CONFIRMED                554  
+SHADOW_TREND_CONFIRMED         540  
+SHADOW_PARTIAL_SELL            529  
+TX_DIAGNOSTIC                  469  
+SHADOW_SIMULATION              431  
+SHADOW_BUY                     408  
+SHADOW_SELL                    389  
+SHADOW_SOCIAL_DISCOVERY        201  
+SHADOW_PUMPSWAP_INSTANT        180  
 SHADOW_TREND_WEAKENING         70   
 TREND_WEAKENING                70   
-SHADOW_COPY_TRADE              49   
-SHADOW_TREND_STRENGTHENING     10   
-TREND_STRENGTHENING            10   
-SHADOW_STARTED                 8    
-SHADOW_DEFENSIVE_ON            7    
+SHADOW_COPY_TRADE              51   
+SHADOW_TX_BUILD_FAILED         38   
+SHADOW_TREND_STRENGTHENING     14   
+TREND_STRENGTHENING            14   
+SHADOW_STARTED                 9    
+SHADOW_DEFENSIVE_ON            8    
 SHADOW_STOPPED                 7    
 CLEANUP_REPORT_GENERATED       2    
-SHADOW_TX_BUILD_FAILED         2    
 SHADOW_DEFENSIVE_OFF           1    
+SHADOW_RE_ENTRY_ELIGIBLE       1    
 section            
 -------------------
 ══ SHADOW TRADES ══
 profile       trades  wr_pct  avg_pnl_pct  pnl_sol
 ------------  ------  ------  -----------  -------
-aggressive    298     9.1     90349.09     -6.3695
-balanced      298     8.4     88619.42     -3.254 
-conservative  296     8.1     85731.03     -1.954 
+aggressive    346     9.5     77814.59     -7.4514
+balanced      346     9.0     76324.81     -3.8166
+conservative  344     9.0     73768.75     -2.1352
 section         
 ----------------
 ══ AUTO-ALPHA ══

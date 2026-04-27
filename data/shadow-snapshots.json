@@ -1,61 +1,141 @@
 {
   "running": true,
-  "startedAt": 1777289584466,
-  "uptimeMs": 5423401,
+  "startedAt": 1777311474814,
+  "uptimeMs": 3173579,
   "profiles": [
     {
       "name": "conservative",
       "label": "Conservative (0.05 SOL)",
-      "balance": 9.95708314217745,
+      "balance": 9.889705624117939,
       "startBalance": 10,
-      "openPositions": 0,
-      "closedTrades": 15,
-      "wins": 5,
-      "winRate": 33.33333333333333,
-      "totalPnlSol": -0.026842555113916214,
-      "exposure": 0,
-      "positions": []
+      "openPositions": 2,
+      "closedTrades": 46,
+      "wins": 7,
+      "winRate": 15.217391304347828,
+      "totalPnlSol": -0.014662349848082658,
+      "exposure": 0.06999999999999999,
+      "positions": [
+        {
+          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+          "protocol": "pumpswap",
+          "entryPrice": 0.00011335184013634631,
+          "currentPrice": 0.00011335184013634631,
+          "pnlPercent": 0,
+          "entrySol": 0.034999999999999996,
+          "durationMs": 12074
+        },
+        {
+          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+          "protocol": "pump.fun",
+          "entryPrice": 2.959153235981363e-8,
+          "currentPrice": 2.959153235981363e-8,
+          "pnlPercent": 0,
+          "entrySol": 0.034999999999999996,
+          "durationMs": 3933
+        }
+      ]
     },
     {
       "name": "balanced",
       "label": "Balanced (0.10 SOL)",
-      "balance": 20.111684008683483,
+      "balance": 19.727189853926344,
       "startBalance": 20,
-      "openPositions": 0,
-      "closedTrades": 15,
-      "wins": 5,
-      "winRate": 33.33333333333333,
-      "totalPnlSol": 0.10262089637178044,
-      "exposure": 0,
-      "positions": []
+      "openPositions": 3,
+      "closedTrades": 45,
+      "wins": 6,
+      "winRate": 13.333333333333334,
+      "totalPnlSol": -0.14712026150455332,
+      "exposure": 0.17815437499999998,
+      "positions": [
+        {
+          "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+          "protocol": "pumpswap",
+          "entryPrice": 0.000030211053968023294,
+          "currentPrice": 0.0003288658021379434,
+          "pnlPercent": 988.561168657106,
+          "entrySol": 0.03815437499999999,
+          "durationMs": 1474227
+        },
+        {
+          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+          "protocol": "pumpswap",
+          "entryPrice": 0.00011335184013634631,
+          "currentPrice": 0.00011335184013634631,
+          "pnlPercent": 0,
+          "entrySol": 0.06999999999999999,
+          "durationMs": 12072
+        },
+        {
+          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+          "protocol": "pump.fun",
+          "entryPrice": 2.959153235981363e-8,
+          "currentPrice": 2.959153235981363e-8,
+          "pnlPercent": 0,
+          "entrySol": 0.06999999999999999,
+          "durationMs": 3930
+        }
+      ]
     },
     {
       "name": "aggressive",
       "label": "Aggressive (0.20 SOL)",
-      "balance": 40.06456952801142,
+      "balance": 39.56170123346056,
       "startBalance": 40,
-      "openPositions": 0,
-      "closedTrades": 15,
+      "openPositions": 3,
+      "closedTrades": 45,
       "wins": 6,
-      "winRate": 40,
-      "totalPnlSol": -0.032103499737642066,
-      "exposure": 0,
-      "positions": []
+      "winRate": 13.333333333333334,
+      "totalPnlSol": -0.2509189974013579,
+      "exposure": 0.35630874999999995,
+      "positions": [
+        {
+          "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+          "protocol": "pumpswap",
+          "entryPrice": 0.000030211053968023294,
+          "currentPrice": 0.0003288658021379434,
+          "pnlPercent": 988.561168657106,
+          "entrySol": 0.07630874999999998,
+          "durationMs": 1474227
+        },
+        {
+          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+          "protocol": "pumpswap",
+          "entryPrice": 0.00011335184013634631,
+          "currentPrice": 0.00011335184013634631,
+          "pnlPercent": 0,
+          "entrySol": 0.13999999999999999,
+          "durationMs": 12071
+        },
+        {
+          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+          "protocol": "pump.fun",
+          "entryPrice": 2.959153235981363e-8,
+          "currentPrice": 2.959153235981363e-8,
+          "pnlPercent": 0,
+          "entrySol": 0.13999999999999999,
+          "durationMs": 3927
+        }
+      ]
     }
   ],
   "eventCounts": {
-    "detected": 3488,
-    "entered": 45,
-    "exited": 45,
-    "skipped": 1885
+    "detected": 3026,
+    "entered": 144,
+    "exited": 136,
+    "skipped": 1495
   },
   "trendSkipReasons": {
-    "rugcheck_high_risk": 1090,
-    "vault_unreadable": 11,
-    "safety_failed": 524,
-    "raydium-ammv4_slots_full": 3,
-    "no_entry_context": 5,
-    "creator_spam": 211,
-    "pool_unreadable": 41
+    "safety_failed": 29,
+    "rugcheck_high_risk": 1124,
+    "vault_unreadable": 8,
+    "pool_unreadable": 84,
+    "creator_spam": 186,
+    "pumpfun_slots_full": 23,
+    "raydium-ammv4_slots_full": 4,
+    "position_exists": 4,
+    "raydium-cpmm_slots_full": 1,
+    "pumpswap_slots_full": 30,
+    "no_entry_context": 1,
+    "invalid_price": 1
   }
 }
