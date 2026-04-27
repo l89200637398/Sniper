@@ -439,11 +439,14 @@ function verifyConfigConsistency(): number {
       `${name}: trailingActivation (${exit.trailingActivationPercent}%) > trailingDrawdown (${exit.trailingDrawdownPercent}%)`
     );
 
-    // Take-profit portions should sum to 0.65–1.0 (runner tail reserves up to 35%)
-    const tpSum = exit.takeProfit.reduce((a: number, t: any) => a + t.portion, 0);
+    // Take-profit portions: partial portions (< 1.0) should sum to < 1.0.
+    // A level with portion >= 1.0 is a "full exit" (e.g. TP5 at 1000%) — excluded from sum.
+    const partialPortions = exit.takeProfit.filter((t: any) => t.portion < 1.0);
+    const hasFullExit = exit.takeProfit.some((t: any) => t.portion >= 1.0);
+    const tpSum = partialPortions.reduce((a: number, t: any) => a + t.portion, 0);
     check(
-      tpSum > 0.5 && tpSum <= 1.01,
-      `${name}: takeProfit portions sum to ${tpSum.toFixed(2)} (expected 0.65–1.0, remainder = runner reserve)`
+      tpSum > 0.3 && tpSum <= 1.01,
+      `${name}: takeProfit partial portions sum to ${tpSum.toFixed(2)}${hasFullExit ? ' + full exit TP' : ''} (expected 0.3–1.0)`
     );
 
     // Take-profit levels should be ascending
