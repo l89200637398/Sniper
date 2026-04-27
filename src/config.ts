@@ -225,12 +225,12 @@ export const config = {
     // Если закрылись по тренду, а тренд возобновился — входим повторно.
     // Pump.fun НЕ поддерживает re-entry (слишком волатилен).
     trendReEntry: {
-      enabled:              false,
-      maxReEntries:         2,        // макс. повторных входов на mint
-      cooldownMs:           30_000,   // минимум 30с после закрытия
-      entryMultiplier:      0.5,      // повторный вход = 50% от базового
-      maxPriceVsLastEntry:  null,      // убрано: полагаемся на maxPumpRatio=3.0 + trend confirmation
-      requiresTpProfit:     true,     // предыдущий выход должен был быть в плюсе
+      enabled:              true,        // false→true: re-entry for scalp + AMM protocols
+      maxReEntries:         3,           // 2→3: scalp pools can give multiple waves
+      cooldownMs:           20_000,      // 30s→20s: faster re-entry for active pools
+      entryMultiplier:      0.5,         // re-entry = 50% of base (risk management)
+      maxPriceVsLastEntry:  null,
+      requiresTpProfit:     true,        // previous exit must be profitable
       allowedProtocols:     ['pumpswap', 'raydium-launch', 'raydium-cpmm', 'raydium-ammv4'],
     },
 
