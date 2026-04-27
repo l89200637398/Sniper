@@ -64,7 +64,7 @@ const StatsCards = memo(function StatsCards() {
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
       <div className="bg-zinc-900 rounded-xl p-4">
         <div className="text-xs text-zinc-500 mb-1">Balance</div>
-        <div className="text-xl font-bold text-white">{balanceSol.toFixed(3)} SOL</div>
+        <div className="text-xl font-bold text-white">{(balanceSol ?? 0).toFixed(3)} SOL</div>
       </div>
       <div className="bg-zinc-900 rounded-xl p-4">
         <div className="text-xs text-zinc-500 mb-1">Positions</div>
@@ -76,8 +76,8 @@ const StatsCards = memo(function StatsCards() {
       </div>
       <div className="bg-zinc-900 rounded-xl p-4">
         <div className="text-xs text-zinc-500 mb-1">Total PnL</div>
-        <div className={`text-xl font-bold ${stats.totalPnlSol >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-          {(stats.totalPnlSol ?? 0) >= 0 ? '+' : ''}{(stats.totalPnlSol ?? 0).toFixed(3)} SOL
+        <div className={`text-xl font-bold ${(stats?.totalPnlSol ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+          {(stats?.totalPnlSol ?? 0) >= 0 ? '+' : ''}{(stats?.totalPnlSol ?? 0).toFixed(3)} SOL
         </div>
       </div>
       <div className="bg-zinc-900 rounded-xl p-4">
@@ -117,10 +117,10 @@ const RecentTradesTable = memo(function RecentTradesTable() {
               <tr key={`${t.mint}-${t.timestamp}`} className="border-t border-zinc-800">
                 <td className="px-3 py-2 font-mono text-xs">{t.mint.slice(0, 8)}...</td>
                 <td className="px-3 py-2 text-zinc-400">{t.reason}</td>
-                <td className={`px-3 py-2 text-right font-mono ${t.pnlSol >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                  {t.pnlSol >= 0 ? '+' : ''}{t.pnlSol.toFixed(4)}
+                <td className={`px-3 py-2 text-right font-mono ${(t.pnlSol ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {(t.pnlSol ?? 0) >= 0 ? '+' : ''}{(t.pnlSol ?? 0).toFixed(4)}
                 </td>
-                <td className="px-3 py-2 text-right text-zinc-400">{(t.durationMs / 1000).toFixed(1)}s</td>
+                <td className="px-3 py-2 text-right text-zinc-400">{((t.durationMs ?? 0) / 1000).toFixed(1)}s</td>
               </tr>
             ))}
           </tbody>
