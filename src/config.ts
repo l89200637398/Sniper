@@ -115,10 +115,10 @@ export const config = {
 
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
-    maxPositions:         10,        // 8→10: 5 PumpSwap + 3 pump.fun + 2 Raydium + 2 CT
-    maxPumpFunPositions:  3,         // 1→3: pump.fun был полностью заблокирован, даём шанс
-    maxPumpSwapPositions: 5,         // 4→5: PumpSwap единственный +EV протокол (43% WR shadow)
-    maxTotalExposureSol:  3.0,       // 2.5→3.0: headroom для 5 PumpSwap×0.15 + pump.fun + Raydium + CT
+    maxPositions:         12,        // 10→12: +2 scalp slots for established pools
+    maxPumpFunPositions:  1,         // 3→1: risky bonding curve, strict filter
+    maxPumpSwapPositions: 5,         // PumpSwap best +EV protocol
+    maxTotalExposureSol:  3.5,       // 3.0→3.5: headroom for scalp positions
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
     minBalanceToTradeSol: 0,         // disabled: торгуем до нуля пока отлаживаем стратегию
 
@@ -453,7 +453,7 @@ export const config = {
     pumpSwapMaxReserveFraction: 0.2,
 
     // ── Raydium LaunchLab (bonding curve) ─────────────────────────────────
-    maxRaydiumLaunchPositions: 2,     // LaunchLab — graduation to AMM = upside potential
+    maxRaydiumLaunchPositions: 1,     // 2→1: risky bonding curve, strict filter
     raydiumLaunch: {
       entryAmountSol:    0.08,       // 0.05→0.08: overhead 25% (was 40%)
       minEntryAmountSol: 0.04,
@@ -487,7 +487,7 @@ export const config = {
     },
 
     // ── Raydium CPMM (AMM) ───────────────────────────────────────────────
-    maxRaydiumCpmmPositions: 2,       // 1→2: два слота для CPMM
+    maxRaydiumCpmmPositions: 3,       // 2→3: +1 for scalp (established pools)
     raydiumCpmm: {
       entryAmountSol:        0.08,   // CPMM: deeper liquidity, keep entry size
       minEntryAmountSol:     0.04,
@@ -522,7 +522,7 @@ export const config = {
     },
 
     // ── Raydium AMM v4 (legacy) ──────────────────────────────────────────
-    maxRaydiumAmmV4Positions: 1,      // 2→1: AMM v4 0% WR in shadow (24/24 dead_volume), минимизируем
+    maxRaydiumAmmV4Positions: 3,      // 1→3: established pools with scalping now included
     raydiumAmmV4: {
       entryAmountSol:        0.06,   // 0.08→0.06: AMM v4 0% WR, снижаем risk per trade
       minEntryAmountSol:     0.04,
@@ -552,6 +552,39 @@ export const config = {
           { levelPercent:   60, portion: 0.20 },  // 90→60
           { levelPercent:  200, portion: 0.10 },  // 300→200
           { levelPercent:  500, portion: 0.05 },  // 700→500: runner reserve 35%
+        ],
+      },
+    },
+
+    // ── Scalping Mode (established high-liquidity pools) ────────────────────
+    // Activated for CPMM/AMM v4 pools with SOL reserve > scalpLiquidityThresholdSol.
+    // Tight TP, tight stops, quick in/out — even +10% is a good scalp trade.
+    scalpLiquidityThresholdSol: 50,    // pools above this = scalp mode
+    scalping: {
+      entryAmountSol:    0.12,         // higher stake: lower risk on established pools
+      minEntryAmountSol: 0.08,
+      exit: {
+        entryStopLossPercent:          5,     // tight SL — established pools shouldn't dip much
+        velocityDropPercent:           10,    // any significant drop = exit
+        velocityWindowMs:              3000,  // 7-8 blocks, sustained drops only
+        trailingActivationPercent:     8,     // activate trailing early — lock in quick gains
+        trailingDrawdownPercent:       3,     // very tight trailing — scalp mode
+        slowDrawdownPercent:           12,
+        slowDrawdownMinDurationMs:     2000,
+        hardStopPercent:               15,    // tight hard stop
+        stagnationWindowMs:        60_000,    // 1 min flatline = exit
+        stagnationMinMove:             0.02,  // very sensitive to stagnation
+        timeStopAfterMs:           120_000,   // 2 min max hold — scalp, not hold
+        timeStopMinPnl:               -0.01,  // quick cut if not moving
+        breakEvenAfterTrailingPercent:  0.5,  // very tight break-even
+        runnerActivationPercent:       25,    // runner at 25% (rare for established pools)
+        runnerTrailDrawdownPercent:    8,     // tight runner trailing
+        runnerHardStopPercent:         15,    // tight runner hard stop
+        takeProfit: [
+          { levelPercent:   5, portion: 0.35 },   // TP1: quick cost recovery at +5%
+          { levelPercent:  10, portion: 0.30 },   // TP2: lock gains at +10%
+          { levelPercent:  20, portion: 0.20 },   // TP3: near-full exit at +20%
+          { levelPercent:  40, portion: 0.10 },   // TP4: 5% runner remains
         ],
       },
     },

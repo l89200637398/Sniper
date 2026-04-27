@@ -146,6 +146,7 @@ interface TrendMintContext {
   pool?: string;
   vaultAOffset?: number;
   vaultBOffset?: number;
+  isScalp?: boolean;
 }
 
 export class ShadowEngine extends EventEmitter {
@@ -160,6 +161,7 @@ export class ShadowEngine extends EventEmitter {
   private pendingBuys = new Map<string, PendingBuy>();
   private trendMintCtx = new Map<string, TrendMintContext>();
   private raydiumPoolToMint = new Map<string, { mint: string; protocol: string }>();
+  private mintScalpFlag = new Map<string, boolean>();
   private mintFirstSeenPrice = new Map<string, { price: number; ts: number }>();
   private creatorMintHistory = new Map<string, number[]>();
   private protocolCounts = { pumpfun: 0, pumpswap: 0, 'raydium-launch': 0, 'raydium-cpmm': 0, 'raydium-ammv4': 0 };
@@ -855,6 +857,7 @@ export class ShadowEngine extends EventEmitter {
         this.seenMints.delete(mint);
         this.mintCreatorMap.delete(mint);
         this.mintFirstSeenPrice.delete(mint);
+        this.mintScalpFlag.delete(mint);
         removed++;
       }
     }
@@ -881,12 +884,13 @@ export class ShadowEngine extends EventEmitter {
         logger.debug(`[shadow] raydium-cpmm-recovery ${mint.slice(0,8)} low liq ${solReserveSol.toFixed(3)} SOL, skip`);
         return;
       }
-      if (solReserveSol > 200) {
-        logger.debug(`[shadow] raydium-cpmm-recovery ${mint.slice(0,8)} high liq ${solReserveSol.toFixed(0)} SOL, skip established`);
-        return;
+      const isScalp = solReserveSol >= config.strategy.scalpLiquidityThresholdSol;
+      if (isScalp) {
+        logger.info(`[shadow] raydium-cpmm-recovery ${mint.slice(0,8)} SCALP mode liq=${solReserveSol.toFixed(0)} SOL`);
       }
 
       this.raydiumPoolToMint.set(poolId.toBase58(), { mint, protocol: 'raydium-cpmm' });
+      this.mintScalpFlag.set(mint, isScalp);
       this.seenMints.set(mint, Date.now());
       this.eventCounts.detected++;
 
@@ -939,13 +943,13 @@ export class ShadowEngine extends EventEmitter {
         logger.debug(`[shadow] raydium-ammv4-recovery ${mintStr.slice(0,8)} low liq ${solReserveSol.toFixed(3)} SOL, skip`);
         return;
       }
-      // Skip established pools — only trade fresh AMM v4 pools (< 200 SOL liquidity)
-      if (solReserveSol > 200) {
-        logger.debug(`[shadow] raydium-ammv4-recovery ${mintStr.slice(0,8)} high liq ${solReserveSol.toFixed(0)} SOL, skip established`);
-        return;
+      const isScalp = solReserveSol >= config.strategy.scalpLiquidityThresholdSol;
+      if (isScalp) {
+        logger.info(`[shadow] raydium-ammv4-recovery ${mintStr.slice(0,8)} SCALP mode liq=${solReserveSol.toFixed(0)} SOL`);
       }
 
       this.raydiumPoolToMint.set(poolStr, { mint: mintStr, protocol: 'raydium-ammv4' });
+      this.mintScalpFlag.set(mintStr, isScalp);
       this.seenMints.set(mintStr, Date.now());
       this.eventCounts.detected++;
 
@@ -1160,9 +1164,10 @@ export class ShadowEngine extends EventEmitter {
     }
 
     const { creator: _creator, ...ctxOpts } = opts;
-    this.trendMintCtx.set(mint, { mint, protocol, pipelineResult, ...ctxOpts });
+    const isScalp = this.mintScalpFlag.get(mint) ?? false;
+    this.trendMintCtx.set(mint, { mint, protocol, pipelineResult, ...ctxOpts, isScalp });
     this.trendTracker.track(mint, protocol);
-    logger.debug(`[shadow] TRACKING ${protocol} ${mint.slice(0, 8)} (score: ${pipelineResult.tokenScore}, social: ${pipelineResult.socialScore})`);
+    logger.debug(`[shadow] TRACKING ${protocol}${isScalp ? ' SCALP' : ''} ${mint.slice(0, 8)} (score: ${pipelineResult.tokenScore}, social: ${pipelineResult.socialScore})`);
   }
 
   private runPipelineDeferred(mint: string, protocol: string) {
@@ -1320,11 +1325,13 @@ export class ShadowEngine extends EventEmitter {
       return;
     }
 
+    const isScalp = ctx?.isScalp ?? this.mintScalpFlag.get(mint) ?? false;
+
     try {
       if (ctx?.accountAddr && ctx.readMode && ctx.readMode !== 'pool-vaults') {
-        await this.enterFromAccount(mint, protocol, ctx.accountAddr, ctx.readMode, pipelineResult, entryMultiplier);
+        await this.enterFromAccount(mint, protocol, ctx.accountAddr, ctx.readMode, pipelineResult, entryMultiplier, isScalp);
       } else if (ctx?.pool && ctx.vaultAOffset !== undefined && ctx.vaultBOffset !== undefined) {
-        await this.enterFromRaydiumPool(mint, protocol, ctx.pool, ctx.vaultAOffset, ctx.vaultBOffset, pipelineResult, entryMultiplier);
+        await this.enterFromRaydiumPool(mint, protocol, ctx.pool, ctx.vaultAOffset, ctx.vaultBOffset, pipelineResult, entryMultiplier, isScalp);
       } else if (ctx?.pool || protocol === 'pumpswap') {
         await this.enterFromPumpSwapPool(mint, ctx?.pool, pipelineResult, entryMultiplier);
       } else {
@@ -1338,7 +1345,7 @@ export class ShadowEngine extends EventEmitter {
 
   // ── Entry from on-chain data (after trend confirmed) ──────────────────
 
-  private async enterFromAccount(mint: string, protocol: string, accountAddr: string, readMode: 'bonding-curve' | 'launch-pool', pipelineResult?: PipelineResult, entryMultiplier = 1.0) {
+  private async enterFromAccount(mint: string, protocol: string, accountAddr: string, readMode: 'bonding-curve' | 'launch-pool', pipelineResult?: PipelineResult, entryMultiplier = 1.0, isScalp = false) {
     const reserves = await this.readSingleAccountReserves(accountAddr, readMode);
     if (!reserves) { this.recordSkip('reserves_unreadable', mint, protocol); return; }
 
@@ -1363,7 +1370,7 @@ export class ShadowEngine extends EventEmitter {
     });
 
     for (const [name] of this.portfolios) {
-      this.tryVirtualBuy(name, mint, protocol, price, solReserve, tokenReserve, pipelineResult, undefined, entryMultiplier);
+      this.tryVirtualBuy(name, mint, protocol, price, solReserve, tokenReserve, pipelineResult, undefined, entryMultiplier, isScalp);
     }
   }
 
@@ -1423,7 +1430,7 @@ export class ShadowEngine extends EventEmitter {
     }
   }
 
-  private async enterFromRaydiumPool(mint: string, protocol: string, pool: string, vaultAOffset: number, vaultBOffset: number, pipelineResult?: PipelineResult, entryMultiplier = 1.0) {
+  private async enterFromRaydiumPool(mint: string, protocol: string, pool: string, vaultAOffset: number, vaultBOffset: number, pipelineResult?: PipelineResult, entryMultiplier = 1.0, isScalp = false) {
     const info = await this.connection.getAccountInfo(new PublicKey(pool));
     if (!info || info.data.length < vaultBOffset + 32) { this.recordSkip('pool_unreadable', mint, protocol); return; }
 
@@ -1484,13 +1491,13 @@ export class ShadowEngine extends EventEmitter {
     });
 
     for (const [name] of this.portfolios) {
-      this.tryVirtualBuy(name, mint, protocol, price, solReserve, tokenReserve, pipelineResult, undefined, entryMultiplier);
+      this.tryVirtualBuy(name, mint, protocol, price, solReserve, tokenReserve, pipelineResult, undefined, entryMultiplier, isScalp);
     }
   }
 
   // ── Virtual buy ─────────────────────────────────────────────────────────
 
-  private tryVirtualBuy(profileName: string, mint: string, protocol: string, entryPrice: number, solReserve: number, tokenReserve: number, pipelineResult?: PipelineResult, overrideEntrySol?: number, entryMultiplier = 1.0) {
+  private tryVirtualBuy(profileName: string, mint: string, protocol: string, entryPrice: number, solReserve: number, tokenReserve: number, pipelineResult?: PipelineResult, overrideEntrySol?: number, entryMultiplier = 1.0, isScalp = false) {
     const portfolio = this.portfolios.get(profileName)!;
     const profile = portfolio.profile;
 
@@ -1508,7 +1515,8 @@ export class ShadowEngine extends EventEmitter {
       return;
     }
 
-    const baseEntry = overrideEntrySol ?? profile.entryAmountSol;
+    const scalpEntry = isScalp ? config.strategy.scalping.entryAmountSol : undefined;
+    const baseEntry = overrideEntrySol ?? scalpEntry ?? profile.entryAmountSol;
     const entrySol = this.getEffectiveEntry(baseEntry) * entryMultiplier;
     if (portfolio.balance < entrySol + BUY_FEE_SOL) {
       this.recordSkip('insufficient_balance');
@@ -1526,7 +1534,7 @@ export class ShadowEngine extends EventEmitter {
       tokenAmount,
       { programId: protocol, quoteMint: WSOL_MINT },
       monitored?.decimals ?? 6,
-      { entryAmountSol: entrySol, protocol: protocol as any, openedAt: Date.now() },
+      { entryAmountSol: entrySol, protocol: protocol as any, openedAt: Date.now(), isScalp },
     );
     pos.tokenScore = tokenScore;
     pos.updatePrice(solReserve, tokenReserve);
@@ -1565,8 +1573,8 @@ export class ShadowEngine extends EventEmitter {
     };
     this.emit('shadow:trade', { type: 'open', ...entry });
 
-    logger.info(`[shadow] ${profileName} BUY ${protocol} ${mint.slice(0, 8)} @ ${entryPrice.toExponential(3)} — ${entrySol} SOL (score: ${tokenScore}, social: ${pipelineResult?.socialScore ?? 0})`);
-    logEvent('SHADOW_BUY', { profile: profileName, mint, protocol, entryPrice, entrySol, tokenScore, socialScore: pipelineResult?.socialScore ?? 0, rugcheckRisk: pipelineResult?.rugcheckRisk });
+    logger.info(`[shadow] ${profileName} BUY ${protocol}${isScalp ? ' SCALP' : ''} ${mint.slice(0, 8)} @ ${entryPrice.toExponential(3)} — ${entrySol} SOL (score: ${tokenScore}, social: ${pipelineResult?.socialScore ?? 0})`);
+    logEvent('SHADOW_BUY', { profile: profileName, mint, protocol, entryPrice, entrySol, tokenScore, socialScore: pipelineResult?.socialScore ?? 0, rugcheckRisk: pipelineResult?.rugcheckRisk, isScalp });
 
     if (this.totalEntriesAllProfiles % this.simulationInterval === 0) {
       this.buildAndSimulateTrade(mint, protocol, entrySol, tokenAmount).catch(err =>
