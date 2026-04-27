@@ -232,10 +232,12 @@ export class Position {
     const age = now - this.openedAt;
     const mintStr = this.mint.toBase58().slice(0,8);
 
-    // 1. Entry stop-loss (Loss-min #3: break-even after TP1)
-    // Break-even activates only after a TP level is CONFIRMED taken (not pending).
-    // pendingTpLevels excluded: if TP tx fails, we must not drop SL to 0%.
-    const effStopLossPercent = (this.takenLevelsCount > 0 && !this.runnerTailActivated)
+    // 1. Entry stop-loss (Loss-min #3: break-even after TP1 specifically)
+    // Break-even activates ONLY when the first TP level (TP1) is confirmed taken.
+    // This prevents premature break-even on runners where higher TPs fire first.
+    const firstTpLevel = this.takeProfitLevels.length > 0 ? this.takeProfitLevels[0].levelPercent : -1;
+    const tp1Taken = this.takenLevels.has(firstTpLevel);
+    const effStopLossPercent = (tp1Taken && !this.runnerTailActivated)
       ? 0
       : exit.entryStopLossPercent;
     if (this.currentPrice <= this.entryPrice * (1 - effStopLossPercent / 100)) {
@@ -345,9 +347,10 @@ export class Position {
     for (const level of this.takeProfitLevels) {
       if (this.levelsReached.has(level.levelPercent) && !this.takenLevels.has(level.levelPercent) && !this.pendingTpLevels.has(level.levelPercent)) {
         const microFullExit = isMicroPosition && this.takenLevelsCount >= 1;
-        const effectiveAction = microFullExit ? 'full' as const : 'partial' as const;
-        const effectivePortion = microFullExit ? 1.0 : level.portion;
-        const effectiveReason = microFullExit ? 'tp_all' as const : 'tp_partial' as const;
+        const isFullExit = microFullExit || level.portion >= 1.0;
+        const effectiveAction = isFullExit ? 'full' as const : 'partial' as const;
+        const effectivePortion = isFullExit ? 1.0 : level.portion;
+        const effectiveReason = isFullExit ? 'tp_all' as const : 'tp_partial' as const;
         logEvent('SHOULD_SELL_TRIGGER', {
           mint: mintStr,
           reason: effectiveReason,

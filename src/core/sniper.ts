@@ -446,24 +446,20 @@ export class Sniper extends EventEmitter {
       logger.warn('[social] Telegram parser init threw:', (err as Error).message);
     }
 
-    // Twitter via RapidAPI (Phase 3 C1) — регистрируется только если задан
-    // RAPIDAPI_KEY. Настройки host/path/queries опциональны — см. twitter.ts.
-    //
-    // Интервал по умолчанию = 3 часа: рассчитан под free-tier провайдера
-    // twitter-api45 (~500 req/мес, rate limit 60 req/min). Можно переопределить
-    // через TWITTER_POLL_INTERVAL_MS, если у вас другой тариф.
-    if (process.env.RAPIDAPI_KEY) {
-      try {
-        const twFetcher = createTwitterFetcher();
-        const pollMs = Number(process.env.TWITTER_POLL_INTERVAL_MS ?? '600000');
-        this.socialManager.registerSource('twitter', twFetcher, pollMs);
-        logger.info(`[social] Twitter source registered (${Math.round(pollMs / 1000)}s interval)`);
-      } catch (err) {
-        logger.warn('[social] Twitter parser init failed:', (err as Error).message);
-      }
-    } else {
-      logger.info('[social] Twitter parser disabled (RAPIDAPI_KEY not set)');
-    }
+    // Twitter via RapidAPI — DISABLED: не даёт стабильных сигналов,
+    // free-tier слишком ограничен. DexScreener + Telegram покрывают потребности.
+    // Для включения: раскомментировать блок ниже + задать RAPIDAPI_KEY.
+    // if (process.env.RAPIDAPI_KEY) {
+    //   try {
+    //     const twFetcher = createTwitterFetcher();
+    //     const pollMs = Number(process.env.TWITTER_POLL_INTERVAL_MS ?? '600000');
+    //     this.socialManager.registerSource('twitter', twFetcher, pollMs);
+    //     logger.info(`[social] Twitter source registered (${Math.round(pollMs / 1000)}s interval)`);
+    //   } catch (err) {
+    //     logger.warn('[social] Twitter parser init failed:', (err as Error).message);
+    //   }
+    // }
+    logger.info('[social] Twitter parser DISABLED (unstable, low value)');
 
     this.socialManager.start();
     this.preLaunchWatcher.start();
@@ -1932,8 +1928,9 @@ export class Sniper extends EventEmitter {
         const pending = this.pendingBuys.get(token.mint);
         if (pending) {
           this.pendingBuys.delete(token.mint);
-          logger.warn(`⏰ Pending buy for ${token.mint} timed out`);
-          logEvent('BUY_PENDING_TIMEOUT', { mint: token.mint });
+          this.seenMints.delete(token.mint);
+          logger.warn(`⏰ Pending buy for ${token.mint} timed out — seenMints cleared for re-entry`);
+          logEvent('BUY_PENDING_TIMEOUT', { mint: token.mint, seenMintsCleared: true });
         }
       });
     }, config.timeouts.pendingBuyTimeoutMs * 2);

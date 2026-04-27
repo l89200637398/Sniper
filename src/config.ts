@@ -414,13 +414,14 @@ export const config = {
         runnerActivationPercent:       80,   // 120→80: AMM runner mode быстрее, ловим 2x+ движения
         runnerTrailDrawdownPercent:    30,   // 25→30: шире trailing в runner mode, даём space для volatility
         runnerHardStopPercent:         45,   // 50→45: защита от полного reversal
-        // EV-MODEL v3: PumpSwap best protocol, optimize for runners.
-        // Portions sum 0.55 → 45% runner reserve (was 40%).
+        // EV-MODEL v4: PumpSwap best protocol, optimize for runners.
+        // Portions sum 0.55 → 45% runner reserve. TP5 at 10x: full exit + re-enter trend monitoring.
         takeProfit: [
-          { levelPercent:   25, portion: 0.25 },  // TP1: 15→25%, AMM позволяет больший upside
-          { levelPercent:   80, portion: 0.15 },  // TP2: 50→80, фиксация позже
-          { levelPercent:  180, portion: 0.10 },  // TP3: 120→180, AMM runners идут далеко
-          { levelPercent:  400, portion: 0.05 },  // TP4: 350→400, runner reserve 45%
+          { levelPercent:   25, portion: 0.25 },  // TP1: cost recovery
+          { levelPercent:   80, portion: 0.15 },  // TP2: solid profit
+          { levelPercent:  180, portion: 0.10 },  // TP3: strong move
+          { levelPercent:  400, portion: 0.05 },  // TP4: big runner
+          { levelPercent: 1000, portion: 1.00 },  // TP5: 10x → sell ALL remaining, transition to trend monitoring
         ],
       },
     },
