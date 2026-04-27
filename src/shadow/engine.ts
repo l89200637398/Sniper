@@ -355,6 +355,19 @@ export class ShadowEngine extends EventEmitter {
 
     if (this.trendTracker.isTracking(mint)) {
       this.trendTracker.recordBuy(mint, buyer, solAmount);
+    } else if (!this.seenMints.has(mint)) {
+      this.seenMints.set(mint, Date.now());
+      this.eventCounts.detected++;
+      const bondingCurve = event.bondingCurve as string | undefined;
+      if (bondingCurve) {
+        this.trendTracker.track(mint, 'pump.fun');
+        this.trendTracker.recordBuy(mint, buyer, solAmount);
+        this.trendMintCtx.set(mint, {
+          mint, protocol: 'pump.fun', accountAddr: bondingCurve, readMode: 'bonding-curve' as const,
+          pipelineResult: { shouldEnter: true, socialScore: 0, tokenScore: 0, rugcheckRisk: 'unknown', safetySafe: true, diagnostics: {} },
+        });
+        this.runPipelineDeferred(mint, 'pump.fun');
+      }
     }
 
     this.tryCopyTrade(mint, buyer, solLamports, 'pump.fun');

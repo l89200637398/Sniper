@@ -116,7 +116,7 @@ export const config = {
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
     maxPositions:         8,         // 4→8: расширяем для multi-protocol coverage (3+2+2+2+2+3CT)
-    maxPumpFunPositions:  1,         // 2→1: pump.fun 0% WR in shadow, минимизируем exposure
+    maxPumpFunPositions:  3,         // 1→3: pump.fun был полностью заблокирован, даём шанс
     maxPumpSwapPositions: 5,         // 4→5: PumpSwap единственный +EV протокол (43% WR shadow)
     maxTotalExposureSol:  2.5,       // 2.0→2.5: headroom для 5 PumpSwap×0.15 + Raydium + CT
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
@@ -600,13 +600,13 @@ export const config = {
     enabled: true,
 
     // Режим A: порог score для мгновенного входа (elite sniper)
-    eliteScoreThreshold: 50,          // 85→50: достижимо (rug_low=20 + creator_clean=15 + social≥1=15 = 50)
+    eliteScoreThreshold: 25,          // 50→25: pump.fun не мог пройти (макс без social=35), теперь rug_low=20+creator=15=35 проходит
 
     // Режим B: минимальный score для отслеживания тренда
     trackingScoreThreshold: 15,       // 45→15: все не-спам токены идут в trendTracker
 
     // Скользящие окна тренда (ms)
-    pumpFunWindowMs:   20_000,       // 10s→20s: 10s слишком жёстко, большинство токенов таймаутились
+    pumpFunWindowMs:   60_000,       // 20s→60s: 20s блокировал все pump.fun (нужно 4 buyers×1.5 SOL за 20s = нереально)
     pumpSwapWindowMs:  120_000,
     raydiumWindowMs:   300_000,
 
@@ -616,7 +616,7 @@ export const config = {
     minBuySellRatio: 2.0,           // 1.5→2.0: требуем более выраженный buy-перевес
 
     // Protocol-specific volume thresholds (override minBuyVolumeSol per protocol)
-    pumpFunMinVolumeSol:       1.5,  // pump.fun: bonding curve, lower liquidity
+    pumpFunMinVolumeSol:       0.5,  // 1.5→0.5: bonding curve tokens имеют меньший объём
     pumpSwapMinVolumeSol:      3.0,  // PumpSwap: AMM pool, need stronger volume signal
     raydiumLaunchMinVolumeSol: 2.0,  // LaunchLab: bonding curve similar to pump.fun
     raydiumAmmMinVolumeSol:    5.0,  // CPMM/AMM v4: deep liquidity, need high volume for signal
@@ -625,7 +625,7 @@ export const config = {
     buyAccelerationGate: true,
 
     // Таймаут ожидания подтверждения тренда (после CREATE)
-    pumpFunTimeoutMs:   45_000,     // 30s→45s: даём больше времени на накопление покупателей
+    pumpFunTimeoutMs:   90_000,     // 45s→90s: pump.fun нужно больше времени для набора buyers
     pumpSwapTimeoutMs:  300_000,
     raydiumTimeoutMs:   600_000,
 
