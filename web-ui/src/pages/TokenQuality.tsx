@@ -130,7 +130,7 @@ export function TokenQuality() {
         <h1 className="text-2xl font-bold">Token Quality</h1>
         <div className="flex items-center gap-3 text-xs text-zinc-500">
           <span>
-            {stats.total} scored  |  {stats.entered} entered  |  avg {stats.avgScore.toFixed(0)} pts
+            {stats.total} scored  |  {stats.entered} entered  |  avg {(stats.avgScore ?? 0).toFixed(0)} pts
           </span>
         </div>
       </div>

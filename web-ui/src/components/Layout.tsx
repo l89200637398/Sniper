@@ -39,7 +39,7 @@ const SidebarContent = memo(function SidebarContent({ onNavClick }: { onNavClick
         </NavLink>
       ))}
       <div className="mt-auto text-xs text-zinc-500 space-y-1 pt-4">
-        <div>Balance: <span className="text-green-400">{balanceSol.toFixed(3)} SOL</span></div>
+        <div>Balance: <span className="text-green-400">{(balanceSol ?? 0).toFixed(3)} SOL</span></div>
         <div className="flex items-center gap-1">
           {wsConnected ? <Wifi size={12} className="text-green-500" /> : <WifiOff size={12} className="text-red-500" />}
           {wsConnected ? 'Connected' : 'Disconnected'}

@@ -50,8 +50,8 @@ function sentimentColor(s: number): string {
 }
 
 function sentimentLabel(s: number): string {
-  if (s >= 0.2)  return `+${s.toFixed(2)}`;
-  if (s <= -0.2) return s.toFixed(2);
+  if (s >= 0.2)  return `+${(s ?? 0).toFixed(2)}`;
+  if (s <= -0.2) return (s ?? 0).toFixed(2);
   return '0';
 }
 

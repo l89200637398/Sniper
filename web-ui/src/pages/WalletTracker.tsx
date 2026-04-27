@@ -273,7 +273,7 @@ export function WalletTracker() {
                           : 'text-zinc-500'
                       }
                     >
-                      {(w.winRate * 100).toFixed(0)}%
+                      {((w.winRate ?? 0) * 100).toFixed(0)}%
                     </span>
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">

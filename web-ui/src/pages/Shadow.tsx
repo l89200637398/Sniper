@@ -344,11 +344,11 @@ export function Shadow() {
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
                 <div>
                   <div className="text-zinc-500 text-xs">Balance</div>
-                  <div className="font-mono text-white">{p.balance.toFixed(4)} SOL</div>
+                  <div className="font-mono text-white">{(p.balance ?? 0).toFixed(4)} SOL</div>
                 </div>
                 <div>
                   <div className="text-zinc-500 text-xs">Start</div>
-                  <div className="font-mono text-zinc-400">{p.startBalance.toFixed(4)} SOL</div>
+                  <div className="font-mono text-zinc-400">{(p.startBalance ?? 0).toFixed(4)} SOL</div>
                 </div>
                 <div>
                   <div className="text-zinc-500 text-xs">Open</div>
@@ -361,19 +361,19 @@ export function Shadow() {
                 <div>
                   <div className="text-zinc-500 text-xs">Win Rate</div>
                   <div className={`font-mono ${p.winRate >= 50 ? 'text-green-400' : p.closedTrades > 0 ? 'text-red-400' : 'text-zinc-400'}`}>
-                    {p.closedTrades > 0 ? `${p.winRate.toFixed(1)}%` : '-'}
+                    {p.closedTrades > 0 ? `${(p.winRate ?? 0).toFixed(1)}%` : '-'}
                   </div>
                 </div>
                 <div>
                   <div className="text-zinc-500 text-xs">Exposure</div>
-                  <div className="font-mono text-white">{p.exposure.toFixed(4)} SOL</div>
+                  <div className="font-mono text-white">{(p.exposure ?? 0).toFixed(4)} SOL</div>
                 </div>
               </div>
 
               <div className="border-t border-zinc-800 pt-2">
                 <div className="text-zinc-500 text-xs">Total PnL</div>
                 <div className={`font-mono text-lg font-bold ${pnlColor(p.totalPnlSol)}`}>
-                  {pnlSign(p.totalPnlSol)}{p.totalPnlSol.toFixed(4)} SOL
+                  {pnlSign(p.totalPnlSol)}{(p.totalPnlSol ?? 0).toFixed(4)} SOL
                 </div>
               </div>
             </div>
@@ -422,9 +422,9 @@ export function Shadow() {
                       {pos.protocol}
                       {pos.isScalp && <span className="ml-1.5 text-[10px] font-semibold bg-cyan-600/30 text-cyan-300 px-1 py-0.5 rounded">SCALP</span>}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono">{pos.entrySol.toFixed(4)}</td>
-                    <td className={`px-3 py-2 text-right font-mono ${pnlColor(pos.pnlPercent)}`}>
-                      {pnlSign(pos.pnlPercent)}{pos.pnlPercent.toFixed(1)}%
+                    <td className="px-3 py-2 text-right font-mono">{(pos.entrySol ?? 0).toFixed(4)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${pnlColor(pos.pnlPercent ?? 0)}`}>
+                      {pnlSign(pos.pnlPercent ?? 0)}{(pos.pnlPercent ?? 0).toFixed(1)}%
                     </td>
                     <td className="px-3 py-2 text-right text-zinc-400 font-mono">
                       {formatDuration(pos.durationMs)}
@@ -484,10 +484,10 @@ export function Shadow() {
                       {t.protocol}
                       {t.isScalp && <span className="ml-1.5 text-[10px] font-semibold bg-cyan-600/30 text-cyan-300 px-1 py-0.5 rounded">SCALP</span>}
                     </td>
-                    <td className="px-3 py-2 text-right font-mono">{t.entrySol.toFixed(4)}</td>
-                    <td className="px-3 py-2 text-right font-mono">{t.exitSol.toFixed(4)}</td>
-                    <td className={`px-3 py-2 text-right font-mono ${pnlColor(t.pnlPct)}`}>
-                      {pnlSign(t.pnlPct)}{t.pnlPct.toFixed(1)}%
+                    <td className="px-3 py-2 text-right font-mono">{(t.entrySol ?? 0).toFixed(4)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{(t.exitSol ?? 0).toFixed(4)}</td>
+                    <td className={`px-3 py-2 text-right font-mono ${pnlColor(t.pnlPct ?? 0)}`}>
+                      {pnlSign(t.pnlPct ?? 0)}{(t.pnlPct ?? 0).toFixed(1)}%
                     </td>
                     <td className="px-3 py-2 text-zinc-400 text-xs">{t.exitReason}</td>
                     <td className="px-3 py-2 text-right text-zinc-400 font-mono">

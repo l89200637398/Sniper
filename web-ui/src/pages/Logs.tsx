@@ -59,10 +59,10 @@ export function Logs() {
                 <span className="text-zinc-300">{t.mint.slice(0, 12)}...</span>
                 <span className="text-zinc-500">{t.protocol}</span>
                 <span className="text-zinc-400">{t.reason}</span>
-                <span className={t.pnlSol >= 0 ? 'text-green-400' : 'text-red-400'}>
-                  {t.pnlSol >= 0 ? '+' : ''}{t.pnlSol.toFixed(4)} SOL
+                <span className={(t.pnlSol ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
+                  {(t.pnlSol ?? 0) >= 0 ? '+' : ''}{(t.pnlSol ?? 0).toFixed(4)} SOL
                 </span>
-                <span className="text-zinc-500">{(t.durationMs / 1000).toFixed(1)}s</span>
+                <span className="text-zinc-500">{((t.durationMs ?? 0) / 1000).toFixed(1)}s</span>
               </div>
             ))}
           </div>

@@ -120,9 +120,9 @@ export function Trades() {
       {/* Summary bar */}
       <div className="flex flex-wrap gap-4 text-xs text-zinc-400">
         <span>Showing: <span className="text-white">{summary.count}</span> trades</span>
-        <span>WR: <span className="text-white">{summary.wr.toFixed(0)}%</span> ({summary.wins}/{summary.count})</span>
-        <span>PnL: <span className={summary.totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}>
-          {summary.totalPnl >= 0 ? '+' : ''}{summary.totalPnl.toFixed(4)} SOL
+        <span>WR: <span className="text-white">{(summary.wr ?? 0).toFixed(0)}%</span> ({summary.wins}/{summary.count})</span>
+        <span>PnL: <span className={(summary.totalPnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
+          {(summary.totalPnl ?? 0) >= 0 ? '+' : ''}{(summary.totalPnl ?? 0).toFixed(4)} SOL
         </span></span>
       </div>
 
@@ -155,10 +155,10 @@ export function Trades() {
                     {trade.is_copy_trade ? <span className="ml-1 text-yellow-400" title="Copy-trade">C</span> : null}
                   </td>
                   <td className="text-zinc-400">{trade.protocol}</td>
-                  <td className="text-right font-mono">{trade.entry_amount_sol.toFixed(4)}</td>
-                  <td className="text-right font-mono">{trade.exit_amount_sol.toFixed(4)}</td>
-                  <td className={`text-right font-mono ${trade.pnl_percent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                    {trade.pnl_percent >= 0 ? '+' : ''}{trade.pnl_percent.toFixed(1)}%
+                  <td className="text-right font-mono">{(trade.entry_amount_sol ?? 0).toFixed(4)}</td>
+                  <td className="text-right font-mono">{(trade.exit_amount_sol ?? 0).toFixed(4)}</td>
+                  <td className={`text-right font-mono ${(trade.pnl_percent ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {(trade.pnl_percent ?? 0) >= 0 ? '+' : ''}{(trade.pnl_percent ?? 0).toFixed(1)}%
                   </td>
                   <td className="text-zinc-400">{trade.exit_reason}</td>
                   <td className="text-right text-zinc-500">{formatDuration(trade.duration_ms ?? 0)}</td>
