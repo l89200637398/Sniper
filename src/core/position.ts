@@ -122,6 +122,7 @@ export class Position {
     this.lastTimestamp = Date.now();
     this.drawdownStart = null;
     this.trailingActivated = false;
+    this.isScalp = options.isScalp ?? false;
 
     const initExit = this.isScalp                         ? config.strategy.scalping.exit
                    : this.protocol === 'pumpswap'        ? config.strategy.pumpSwap.exit
@@ -144,7 +145,6 @@ export class Position {
     this.feeRecipientUsed = options.feeRecipientUsed;
     this.creator = options.creator;
     this.cashbackEnabled = options.cashbackEnabled ?? false;
-    this.isScalp = options.isScalp ?? false;
     this.lastBuyActivityTs = this.openedAt;
   }
 

@@ -4651,26 +4651,38 @@ export class Sniper extends EventEmitter {
       return;
     }
 
-    // ── Rugcheck gate for trend entries ──
-    // Trend-confirmed tokens already showed real buy activity, so we relax rugcheck:
-    // block only critical risk (honeypot, score < 15), allow medium-risk through.
-    // This opens ~60% more entries that were previously hard-blocked.
+    // ── Rugcheck gate (protocol-aware, mirrors shadow pipeline) ──
     if (config.strategy.enableRugcheck) {
       const rugResult = await checkRugcheck(mint).catch(() => null);
-      if (rugResult && rugResult.risk === 'high' && rugResult.score < 15) {
-        logEvent('TREND_SKIP', { mint, reason: 'rugcheck_critical', protocol: metrics.protocol, score: rugResult.score, risks: rugResult.risks });
-        this.trendTracker.remove(mint);
-        this.trendTokenData.delete(mint);
-        return;
-      }
-      if (rugResult && rugResult.risks.includes('HONEYPOT')) {
-        logEvent('TREND_SKIP', { mint, reason: 'rugcheck_honeypot', protocol: metrics.protocol, score: rugResult.score });
-        this.trendTracker.remove(mint);
-        this.trendTokenData.delete(mint);
-        return;
+      if (rugResult && rugResult.risk === 'high') {
+        const isMigrated = metrics.protocol === 'pumpswap';
+        const hasCriticalRisk = rugResult.risks.some((r: string) =>
+          r.includes('HONEYPOT') || r.includes('freeze_authority'),
+        );
+        if (!isMigrated || hasCriticalRisk) {
+          logEvent('TREND_SKIP', { mint, reason: 'rugcheck_high_risk', protocol: metrics.protocol, score: rugResult.score, risks: rugResult.risks, isMigrated, hasCriticalRisk });
+          this.trendTracker.remove(mint);
+          this.trendTokenData.delete(mint);
+          return;
+        }
       }
       if (rugResult) {
         logEvent('TREND_RUGCHECK_PASS', { mint, protocol: metrics.protocol, risk: rugResult.risk, score: rugResult.score });
+      }
+    }
+
+    // ── Safety check (protocol-aware, mirrors shadow pipeline) ──
+    {
+      const safetyResult = await isTokenSafeCached(this.connection, new PublicKey(mint)).catch((): { safe: boolean; reason?: string } => ({ safe: true }));
+      if (!safetyResult.safe) {
+        const isAmmProtocol = ['pumpswap', 'raydium-cpmm', 'raydium-ammv4'].includes(metrics.protocol);
+        const isFreezeIssue = safetyResult.reason?.includes('Freeze authority');
+        if (!isAmmProtocol || isFreezeIssue) {
+          logEvent('TREND_SKIP', { mint, reason: 'safety_failed', protocol: metrics.protocol, safetyReason: safetyResult.reason });
+          this.trendTracker.remove(mint);
+          this.trendTokenData.delete(mint);
+          return;
+        }
       }
     }
 
