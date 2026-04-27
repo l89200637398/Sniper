@@ -27,7 +27,17 @@ import type { ShadowProfile } from './profiles';
 
 const BUY_FEE_SOL = 0.001;
 const SELL_FEE_SOL = 0.001;
-const SLIPPAGE_BPS = 500;
+const DEFAULT_SLIPPAGE_BPS = 500;
+
+function estimateSlippageBps(solReserve: number, tradeSizeSol: number): number {
+  if (solReserve <= 0) return DEFAULT_SLIPPAGE_BPS;
+  // Constant-product price impact: tradeSizeSol / (solReserve + tradeSizeSol)
+  // Plus protocol fee ~25-50 bps
+  const priceImpactBps = (tradeSizeSol / (solReserve + tradeSizeSol)) * 10000;
+  const protocolFeeBps = 50;
+  const totalBps = Math.ceil(priceImpactBps + protocolFeeBps);
+  return Math.max(10, Math.min(totalBps, DEFAULT_SLIPPAGE_BPS));
+}
 const POLL_INTERVAL_MS = 3000;
 const MAX_DETECTED_TOKENS = 2000;
 const MAX_TRADE_LOG = 2000;
@@ -1523,7 +1533,8 @@ export class ShadowEngine extends EventEmitter {
       return;
     }
 
-    const slippageFactor = 1 - SLIPPAGE_BPS / 10000;
+    const buySlippageBps = estimateSlippageBps(solReserve, entrySol);
+    const slippageFactor = 1 - buySlippageBps / 10000;
     const tokenAmount = (entrySol / entryPrice) * slippageFactor;
     const tokenScore = pipelineResult?.tokenScore ?? 0;
 
@@ -1562,7 +1573,7 @@ export class ShadowEngine extends EventEmitter {
     tradeLog.open({
       mint, protocol: protocol as any, entryPrice,
       amountSol: entrySol, tokensReceived: tokenAmount,
-      slippageBps: SLIPPAGE_BPS, jitoTipSol: 0,
+      slippageBps: buySlippageBps, jitoTipSol: 0,
       txId: `shadow_${profileName}_${now}`,
       openedAt: now, tokenScore,
     });
@@ -1573,8 +1584,8 @@ export class ShadowEngine extends EventEmitter {
     };
     this.emit('shadow:trade', { type: 'open', ...entry });
 
-    logger.info(`[shadow] ${profileName} BUY ${protocol}${isScalp ? ' SCALP' : ''} ${mint.slice(0, 8)} @ ${entryPrice.toExponential(3)} — ${entrySol} SOL (score: ${tokenScore}, social: ${pipelineResult?.socialScore ?? 0})`);
-    logEvent('SHADOW_BUY', { profile: profileName, mint, protocol, entryPrice, entrySol, tokenScore, socialScore: pipelineResult?.socialScore ?? 0, rugcheckRisk: pipelineResult?.rugcheckRisk, isScalp });
+    logger.info(`[shadow] ${profileName} BUY ${protocol}${isScalp ? ' SCALP' : ''} ${mint.slice(0, 8)} @ ${entryPrice.toExponential(3)} — ${entrySol} SOL (score: ${tokenScore}, social: ${pipelineResult?.socialScore ?? 0}, slip=${buySlippageBps}bps)`);
+    logEvent('SHADOW_BUY', { profile: profileName, mint, protocol, entryPrice, entrySol, tokenScore, socialScore: pipelineResult?.socialScore ?? 0, rugcheckRisk: pipelineResult?.rugcheckRisk, isScalp, buySlippageBps });
 
     if (this.totalEntriesAllProfiles % this.simulationInterval === 0) {
       this.buildAndSimulateTrade(mint, protocol, entrySol, tokenAmount).catch(err =>
@@ -1683,14 +1694,18 @@ export class ShadowEngine extends EventEmitter {
     if (!pos) return;
 
     const sellTokens = pos.amount * portion;
-    const exitSol = sellTokens * pos.currentPrice * (1 - SLIPPAGE_BPS / 10000);
+    const sellSolValue = sellTokens * pos.currentPrice;
+    const monitored = this.monitored.get(mint);
+    const solRes = monitored?.lastSolReserve ?? 0;
+    const sellSlippageBps = estimateSlippageBps(solRes, sellSolValue);
+    const exitSol = sellSolValue * (1 - sellSlippageBps / 10000);
     const netSol = Math.max(0, exitSol - SELL_FEE_SOL);
 
     portfolio.balance += netSol;
     pos.reduceAmount(portion);
 
-    logger.info(`[shadow] ${profileName} PARTIAL SELL ${mint.slice(0, 8)} ${(portion * 100).toFixed(0)}% — ${reason} — +${netSol.toFixed(4)} SOL`);
-    logEvent('SHADOW_PARTIAL_SELL', { profile: profileName, mint, reason, portion, solReceived: netSol });
+    logger.info(`[shadow] ${profileName} PARTIAL SELL ${mint.slice(0, 8)} ${(portion * 100).toFixed(0)}% — ${reason} — +${netSol.toFixed(4)} SOL (slip=${sellSlippageBps}bps)`);
+    logEvent('SHADOW_PARTIAL_SELL', { profile: profileName, mint, reason, portion, solReceived: netSol, slippageBps: sellSlippageBps });
   }
 
   private virtualFullSell(profileName: string, mint: string, reason: string) {
@@ -1699,7 +1714,11 @@ export class ShadowEngine extends EventEmitter {
     if (!pos) return;
 
     const exitPrice = pos.currentPrice;
-    const exitSol = pos.amount * exitPrice * (1 - SLIPPAGE_BPS / 10000);
+    const grossExitSol = pos.amount * exitPrice;
+    const monitored = this.monitored.get(mint);
+    const solRes = monitored?.lastSolReserve ?? 0;
+    const sellSlippageBps = estimateSlippageBps(solRes, grossExitSol);
+    const exitSol = grossExitSol * (1 - sellSlippageBps / 10000);
     const totalFees = BUY_FEE_SOL + SELL_FEE_SOL;
     const netExitSol = Math.max(0, exitSol - SELL_FEE_SOL);
     const pnlSol = netExitSol - pos.entryAmountSol;
@@ -1784,8 +1803,8 @@ export class ShadowEngine extends EventEmitter {
     this.emit('shadow:trade', { type: 'close', ...entry });
 
     const pnlColor = pnlSol >= 0 ? '+' : '';
-    logger.info(`[shadow] ${profileName} SELL ${mint.slice(0, 8)} — ${reason} — ${pnlColor}${pnlSol.toFixed(4)} SOL (${pnlColor}${pnlPct.toFixed(1)}%) — ${(durationMs / 1000).toFixed(0)}s — peak=${maxPnlPct.toFixed(1)}%`);
-    logEvent('SHADOW_SELL', { profile: profileName, mint, reason, pnlSol, pnlPct, maxPnlPct, durationMs, exitPrice, balance: portfolio.balance, tokenScore: pos.tokenScore });
+    logger.info(`[shadow] ${profileName} SELL ${mint.slice(0, 8)} — ${reason} — ${pnlColor}${pnlSol.toFixed(4)} SOL (${pnlColor}${pnlPct.toFixed(1)}%) — ${(durationMs / 1000).toFixed(0)}s — peak=${maxPnlPct.toFixed(1)}% slip=${sellSlippageBps}bps`);
+    logEvent('SHADOW_SELL', { profile: profileName, mint, reason, pnlSol, pnlPct, maxPnlPct, durationMs, exitPrice, balance: portfolio.balance, tokenScore: pos.tokenScore, sellSlippageBps });
 
     // Track win/loss for defensive mode (same as real bot)
     const dCfg = (config.strategy as any).defensive;
@@ -1892,7 +1911,7 @@ export class ShadowEngine extends EventEmitter {
     logger.info(`[shadow] SIMULATION #${this.totalEntriesAllProfiles} — building TX for ${protocol} ${mint.slice(0, 8)}`);
 
     const buyResult = await buildBuyTransaction(
-      this.connection, mintPub, this.payer, protocol, entrySol, SLIPPAGE_BPS,
+      this.connection, mintPub, this.payer, protocol, entrySol, DEFAULT_SLIPPAGE_BPS,
     );
 
     logEvent('TX_DIAGNOSTIC', {
@@ -1920,7 +1939,7 @@ export class ShadowEngine extends EventEmitter {
 
     try {
       sellResult = await buildSellTransaction(
-        this.connection, mintPub, this.payer, protocol, tokenAmountRaw, SLIPPAGE_BPS,
+        this.connection, mintPub, this.payer, protocol, tokenAmountRaw, DEFAULT_SLIPPAGE_BPS,
       );
 
       logEvent('TX_DIAGNOSTIC', {
