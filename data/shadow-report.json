@@ -1,87 +1,98 @@
 {
   "running": true,
   "startedAt": 1777311474814,
-  "uptimeMs": 3245007,
+  "uptimeMs": 3474248,
   "profiles": [
     {
       "name": "conservative",
       "label": "Conservative (0.05 SOL)",
-      "balance": 9.956993444817938,
+      "balance": 9.918637355167938,
       "startBalance": 10,
-      "openPositions": 0,
-      "closedTrades": 48,
+      "openPositions": 1,
+      "closedTrades": 49,
       "wins": 7,
-      "winRate": 14.583333333333334,
-      "totalPnlSol": -0.017374529148082657,
-      "exposure": 0,
-      "positions": []
+      "winRate": 14.285714285714285,
+      "totalPnlSol": -0.018730618798082653,
+      "exposure": 0.034999999999999996,
+      "positions": [
+        {
+          "mint": "C7ResuU9ucBYXZCCkJKTRhcGeWmouCEnMug9k2GFLeAh",
+          "protocol": "pumpswap",
+          "entryPrice": 0.0002731268998352094,
+          "currentPrice": 0.0002763684085032287,
+          "pnlPercent": 1.1868141402311707,
+          "entrySol": 0.034999999999999996,
+          "durationMs": 5904
+        }
+      ]
     },
     {
       "name": "balanced",
       "label": "Balanced (0.10 SOL)",
-      "balance": 19.863765495326344,
+      "balance": 20.053675807635468,
       "startBalance": 20,
       "openPositions": 1,
-      "closedTrades": 47,
-      "wins": 6,
-      "winRate": 12.76595744680851,
-      "totalPnlSol": -0.15054462010455333,
-      "exposure": 0.03815437499999999,
+      "closedTrades": 49,
+      "wins": 7,
+      "winRate": 14.285714285714285,
+      "totalPnlSol": 0.0732113172045719,
+      "exposure": 0.06999999999999999,
       "positions": [
         {
-          "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+          "mint": "C7ResuU9ucBYXZCCkJKTRhcGeWmouCEnMug9k2GFLeAh",
           "protocol": "pumpswap",
-          "entryPrice": 0.000030211053968023294,
-          "currentPrice": 0.00035666077562779346,
-          "pnlPercent": 1080.5638294026382,
-          "entrySol": 0.03815437499999999,
-          "durationMs": 1545655
+          "entryPrice": 0.0002731268998352094,
+          "currentPrice": 0.0002763684085032287,
+          "pnlPercent": 1.1868141402311707,
+          "entrySol": 0.06999999999999999,
+          "durationMs": 5903
         }
       ]
     },
     {
       "name": "aggressive",
       "label": "Aggressive (0.20 SOL)",
-      "balance": 39.83685251626056,
+      "balance": 40.22067314087881,
       "startBalance": 40,
       "openPositions": 1,
-      "closedTrades": 47,
-      "wins": 6,
-      "winRate": 12.76595744680851,
-      "totalPnlSol": -0.25576771460135794,
-      "exposure": 0.07630874999999998,
+      "closedTrades": 49,
+      "wins": 7,
+      "winRate": 14.285714285714285,
+      "totalPnlSol": 0.1937441600168925,
+      "exposure": 0.13999999999999999,
       "positions": [
         {
-          "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+          "mint": "C7ResuU9ucBYXZCCkJKTRhcGeWmouCEnMug9k2GFLeAh",
           "protocol": "pumpswap",
-          "entryPrice": 0.000030211053968023294,
-          "currentPrice": 0.00035666077562779346,
-          "pnlPercent": 1080.5638294026382,
-          "entrySol": 0.07630874999999998,
-          "durationMs": 1545655
+          "entryPrice": 0.0002731268998352094,
+          "currentPrice": 0.0002763684085032287,
+          "pnlPercent": 1.1868141402311707,
+          "entrySol": 0.13999999999999999,
+          "durationMs": 5902
         }
       ]
     }
   ],
   "eventCounts": {
-    "detected": 3035,
-    "entered": 144,
-    "exited": 142,
-    "skipped": 1496
+    "detected": 3208,
+    "entered": 150,
+    "exited": 147,
+    "skipped": 1603
   },
   "trendSkipReasons": {
     "safety_failed": 29,
-    "rugcheck_high_risk": 1125,
-    "vault_unreadable": 8,
-    "pool_unreadable": 84,
-    "creator_spam": 186,
+    "rugcheck_high_risk": 1204,
+    "vault_unreadable": 11,
+    "pool_unreadable": 90,
+    "creator_spam": 204,
     "pumpfun_slots_full": 23,
     "raydium-ammv4_slots_full": 4,
     "position_exists": 4,
     "raydium-cpmm_slots_full": 1,
     "pumpswap_slots_full": 30,
     "no_entry_context": 1,
-    "invalid_price": 1
+    "invalid_price": 1,
+    "raydium-launch_slots_full": 1
   },
   "trades": [
     {
@@ -2497,23 +2508,108 @@
       "openedAt": 1777314644466,
       "closedAt": 1777314715833,
       "feesSol": 0.002
+    },
+    {
+      "profile": "balanced",
+      "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+      "protocol": "pumpswap",
+      "entrySol": 0.03815437499999999,
+      "exitSol": 0.2636224916091252,
+      "entryPrice": 0.000030211053968023294,
+      "exitPrice": 0.00021168467851078788,
+      "pnlPct": 590.9364695637795,
+      "pnlSol": 0.22546811660912522,
+      "maxPnlPct": 1310.0960654749747,
+      "exitReason": "hard_stop",
+      "durationMs": 1672410,
+      "openedAt": 1777313174166,
+      "closedAt": 1777314846576,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "aggressive",
+      "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+      "protocol": "pumpswap",
+      "entrySol": 0.07630874999999998,
+      "exitSol": 0.5282449832182504,
+      "entryPrice": 0.000030211053968023294,
+      "exitPrice": 0.00021168467851078788,
+      "pnlPct": 592.24693527053,
+      "pnlSol": 0.45193623321825044,
+      "maxPnlPct": 1310.0960654749747,
+      "exitReason": "hard_stop",
+      "durationMs": 1672412,
+      "openedAt": 1777313174166,
+      "closedAt": 1777314846578,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "conservative",
+      "mint": "54L2bczAToNHAwCjF4QKLgPvsc8J8dQ6yKH5v7H7bonk",
+      "protocol": "raydium-launch",
+      "entrySol": 0.034999999999999996,
+      "exitSol": 0.03364391035,
+      "entryPrice": 0.000001749413898211077,
+      "exitPrice": 0.000001749413898211077,
+      "pnlPct": -3.8745418571428463,
+      "pnlSol": -0.001356089649999996,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 47035,
+      "openedAt": 1777314838469,
+      "closedAt": 1777314885504,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "balanced",
+      "mint": "54L2bczAToNHAwCjF4QKLgPvsc8J8dQ6yKH5v7H7bonk",
+      "protocol": "raydium-launch",
+      "entrySol": 0.06999999999999999,
+      "exitSol": 0.0682878207,
+      "entryPrice": 0.000001749413898211077,
+      "exitPrice": 0.000001749413898211077,
+      "pnlPct": -2.445970428571416,
+      "pnlSol": -0.0017121792999999913,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 47036,
+      "openedAt": 1777314838471,
+      "closedAt": 1777314885507,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "aggressive",
+      "mint": "54L2bczAToNHAwCjF4QKLgPvsc8J8dQ6yKH5v7H7bonk",
+      "protocol": "raydium-launch",
+      "entrySol": 0.13999999999999999,
+      "exitSol": 0.1375756414,
+      "entryPrice": 0.000001749413898211077,
+      "exitPrice": 0.000001749413898211077,
+      "pnlPct": -1.7316847142857015,
+      "pnlSol": -0.0024243585999999817,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 47038,
+      "openedAt": 1777314838471,
+      "closedAt": 1777314885509,
+      "feesSol": 0.002
     }
   ],
   "bestTrade": {
     "profile": "aggressive",
-    "mint": "4b3XmbpmcC32rcfo8yWY2tkV5sfda83GmpHocx1fpump",
-    "protocol": "pump.fun",
-    "entrySol": 0.0784,
-    "exitSol": 0.16683917254075992,
-    "entryPrice": 2.8340245780379104e-8,
-    "exitPrice": 6.129457211606661e-8,
-    "pnlPct": 112.80506701627542,
-    "pnlSol": 0.08843917254075992,
-    "maxPnlPct": 189.47959904952458,
-    "exitReason": "trailing_stop",
-    "durationMs": 35521,
-    "openedAt": 1777313050788,
-    "closedAt": 1777313086309,
+    "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
+    "protocol": "pumpswap",
+    "entrySol": 0.07630874999999998,
+    "exitSol": 0.5282449832182504,
+    "entryPrice": 0.000030211053968023294,
+    "exitPrice": 0.00021168467851078788,
+    "pnlPct": 592.24693527053,
+    "pnlSol": 0.45193623321825044,
+    "maxPnlPct": 1310.0960654749747,
+    "exitReason": "hard_stop",
+    "durationMs": 1672412,
+    "openedAt": 1777313174166,
+    "closedAt": 1777314846578,
     "feesSol": 0.002
   },
   "worstTrade": {
@@ -2533,7 +2629,7 @@
     "closedAt": 1777313668361,
     "feesSol": 0.002
   },
-  "avgDurationMs": 122065.8661971831,
+  "avgDurationMs": 141627.78231292518,
   "protocolBreakdown": {
     "pump.fun": {
       "count": 78,
@@ -2551,14 +2647,14 @@
       "pnlSol": -0.0117712052355788
     },
     "raydium-launch": {
-      "count": 18,
+      "count": 21,
       "wins": 0,
-      "pnlSol": -0.032955765299999815
+      "pnlSol": -0.038448392849999784
     },
     "pumpswap": {
-      "count": 22,
-      "wins": 8,
-      "pnlSol": -0.05639952383416681
+      "count": 24,
+      "wins": 10,
+      "pnlSol": 0.6210048259932088
     }
   },
   "detectedTokens": [
@@ -19497,14 +19593,1211 @@
       "rugcheckRisk": "high",
       "safetySafe": true,
       "detectedAt": 1777314718771
+    },
+    {
+      "mint": "28NYyVd7ojCpo2uphRs3rUwysijkXtJ29FUqs65kpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314791161
+    },
+    {
+      "mint": "Dy8bsemH4KLQtdo1gDe3p39pEeqEstHzJyW7BrWhpzom",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "vault_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314792132
+    },
+    {
+      "mint": "FZxkkK7JkKa51MtY77A7x1df6i75DoMcRcSzNMPvqeT2",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "vault_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314793376
+    },
+    {
+      "mint": "9cJSRyiGfreKLbPVHXg41vqC1qBx685hLFg2FX6qpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314794301
+    },
+    {
+      "mint": "FqsziUXa4h4PFrrV6aepbpBysrs2rbtH5Degpy1Lpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314795014
+    },
+    {
+      "mint": "AokSoWriue5fTihvER2SeASPoQbLRgA9kDUT9yYnyTh8",
+      "protocol": "raydium-ammv4",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314795183
+    },
+    {
+      "mint": "4RzryYXcZiTrFwV579Mh3rgYaWigToTsEmmG8xWcpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314795196
+    },
+    {
+      "mint": "52oCbGdc2eHkEppCovx6DpfNevj97v6z14svYde1pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314796563
+    },
+    {
+      "mint": "BEXPNkQGnTTaAx9d1CZf3UJygbo8RKhqjtrN1k8CVeNg",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314803441
+    },
+    {
+      "mint": "FeBL86eFegqggPf9SZe2D1ayFS6BSChbZpVGDatkpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314803748
+    },
+    {
+      "mint": "9uLR2AvTHmRNeNdnwa4s3vP7Q4syPvTsS979KcLppump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314805413
+    },
+    {
+      "mint": "CJxAhwV8nnwrJMctDjvFpS7E1tBqmfALWvHbRC1Ypump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314811662
+    },
+    {
+      "mint": "HvDp2tciGEPS5p8XhLeiG5CXWkWwqBMjyWPWhpgypump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314815574
+    },
+    {
+      "mint": "DRRR82uNkLKNFKTZ3g8MZpSjYCagMQzvwTDCfpLvpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314815851
+    },
+    {
+      "mint": "CPqtQ67crhokUyxc2bVuVqdgoQFHK3ywaJdeKUYze2YV",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314816759
+    },
+    {
+      "mint": "ESTGoXTToYbMWKFLgD8nfN48Ku4H9LHDKLQ3LLNqpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314817337
+    },
+    {
+      "mint": "CjEh2Coyfib5xruRd4hBhNZ4XStz2ifCrUEnGShHpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314818013
+    },
+    {
+      "mint": "GoBdw4D5ykJrxy2wZTuYEqZvoDMW1UXeNYALdcqT21Pm",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "vault_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314818438
+    },
+    {
+      "mint": "Cjigqnt1AGafR7QMmthXixWKPGbSo8SLhkNeWdsUpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314818466
+    },
+    {
+      "mint": "HkLE6TsT9XiNv5hLN1PzNBjtmbJW6UP5S55VAmGypump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314821375
+    },
+    {
+      "mint": "7myAH54yatvSpJhJanoveXeoa4EhjjUEDY9m8AVhpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314824723
+    },
+    {
+      "mint": "9esEPXighDtkP8urXJ7iy556XSHk14ntXZFpyEB5SAo6",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314824907
+    },
+    {
+      "mint": "HrA9A3yd31keL2qLRDu5TsyqiWikpyLTyfvrhYHGpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314825580
+    },
+    {
+      "mint": "F9HphzdPyVeh7qHnCakZbCACUSC6wTn5pPr9T7WUpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314826901
+    },
+    {
+      "mint": "3U5uiSQ7r87CKxhpaiATJ56856wc5UhkoLiVYY5Zpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314828155
+    },
+    {
+      "mint": "2qk2eMHkiLAnENKHuwWGdP75iGsVHqLj3gH6xkWupump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314828174
+    },
+    {
+      "mint": "8n4mF3F2RxNWERZSEHVxge47DFPpULyZXPkGr6Atpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314828210
+    },
+    {
+      "mint": "GTa4QrLUAMJaqLBRkFb7DvLEGibkxmpS4cipfQSjpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314828395
+    },
+    {
+      "mint": "CPqtQ67crhokUyxc2bVuVqdgoQFHK3ywaJdeKUYze2YV",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314829418
+    },
+    {
+      "mint": "HdUoChJCnmqFht7FMEBWQfhg1hT7pZgE87TY9PqZpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314830170
+    },
+    {
+      "mint": "9stdYNAHYuzdjaRrzxzVKVzx5Tb2mBL7m1F2Kb7ajYBw",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314831634
+    },
+    {
+      "mint": "BVLiB6hq13RT1T5kiVBfvvFjfSn3hm387Ngeerifpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314832848
+    },
+    {
+      "mint": "4uXCoj43BuWXEKMGe2SeVBAU1nR6u3MM3fAJCfKXpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314833775
+    },
+    {
+      "mint": "J9rp8CiohXqDDBdzpQajxnFbTSTbVoVB13hA5EMpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314833923
+    },
+    {
+      "mint": "EudYggjsQ7yXjyQ74ttTuZvgo9SJaZTUC3FkCuSMpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314834125
+    },
+    {
+      "mint": "CWTigfbFtYCTPSQZ4LTCEBp7nMXZvU5RNaYFmSxtpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314834283
+    },
+    {
+      "mint": "4fsS987zPUfGzZfFStE5rGwdLtDuLGiRRUj9W314pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314834979
+    },
+    {
+      "mint": "3QQBueTsYYafgMsRzjqoyi1W4ctPeVDmYQ2nh7CCpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314836262
+    },
+    {
+      "mint": "2sj615PyHj5sMbQWdUJ6XxG1Lm1qTga9nu6T9aJUpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314836263
+    },
+    {
+      "mint": "54L2bczAToNHAwCjF4QKLgPvsc8J8dQ6yKH5v7H7bonk",
+      "protocol": "raydium-launch",
+      "outcome": "entered",
+      "tokenScore": 35,
+      "socialScore": 1,
+      "rugcheckRisk": "medium",
+      "safetySafe": true,
+      "detectedAt": 1777314838469
+    },
+    {
+      "mint": "8BrEaWgXZdSpFXvXThvFdjganZpU1CHpE8VUaaqepump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314838962
+    },
+    {
+      "mint": "HE2zyJwbUkAxCS4T3UKTtRyyPF5ArmNSaoiQZFDwpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314840950
+    },
+    {
+      "mint": "7Czr9nkMsGr5kknakBid3tozksk4w1848uP9bMeRpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314841559
+    },
+    {
+      "mint": "HRc9B98SDWwRbazrsmZTSqTFMsexdMhRCz11hWqspump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314841562
+    },
+    {
+      "mint": "EY9vQeBbNWkDERex45kkyVUWngaKpGkyN8AuzHqPpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314845852
+    },
+    {
+      "mint": "FoXaYcqrVMkHX44ZJbnj6Pm9ZzdPQT8CW1XPT93bonk",
+      "protocol": "raydium-launch",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314847242
+    },
+    {
+      "mint": "GyYQcbXavGoJKj1vFvDLtFHE8moxbfJdd5w3Quacpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314847295
+    },
+    {
+      "mint": "62iAgqrS9jSkH7y9hxXe5qLymamUiBCKddoZ7zvvpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314849795
+    },
+    {
+      "mint": "2zpnKKQrQLsXLrDVWsHsMnFELsVw1eG44CpiV7V2pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314850217
+    },
+    {
+      "mint": "4JFcUJ1HfFKz2F8thdu2frk558EjrLvKEmeMq1ZM2xBP",
+      "protocol": "raydium-cpmm",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314851308
+    },
+    {
+      "mint": "BhVZaD95MG3jB6WqA9pXthhqPkWumByQaA2NZ6W4pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314853292
+    },
+    {
+      "mint": "92AHiHXjkFuBi1DBnoGDcrUoF7APHhCQMvkrk8Eopump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314853652
+    },
+    {
+      "mint": "DVrWJCMmSwfnHnU47hBRczWLzJHU4nrRUy5Kq9UA1WDq",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854081
+    },
+    {
+      "mint": "6VZfXGmvZm3xL7wcx8JQavmSrrHpSRqed8sSQRpLpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854166
+    },
+    {
+      "mint": "G4Svv666C4BQsD9bZAAhmrVji5tHfsX1m5VZWHtApump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314854539
+    },
+    {
+      "mint": "qbhkUQ2q9mken5ayqi8G5uo4dcP5F1gbs7LEcZxpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314854550
+    },
+    {
+      "mint": "GrWfSWwBmmqKtdMCdVXXC7kCGoq6Su4bnqBpjnsbpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854591
+    },
+    {
+      "mint": "z6mjPwQHH6XMFeihGbWBwU3k467nryVUTbQ59gdpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854608
+    },
+    {
+      "mint": "24M4wKChfYTEco9XzKLu4ndSA2LubmrGJA9QvREMpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854660
+    },
+    {
+      "mint": "39BNs9u9tfWXSmFmSWpdDGXWj9RWovoUGv5AiqpJpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314854661
+    },
+    {
+      "mint": "53cFykiYFMyD3dvvjoewkqWpnGTUJK8QwriJfigZpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314855074
+    },
+    {
+      "mint": "A47D2wzron9YDwmxbSwYmC1Eno1QxH6wjZ3Rc7GUMbm6",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314857496
+    },
+    {
+      "mint": "E1Y98dQpLrrs38eWsaZUpkPqfghUYzcb6LDE2TCLpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314860367
+    },
+    {
+      "mint": "4XaBwGXgwEyfpQeLmB8VMshyHHzLj99KrGLQ6xFTpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314867395
+    },
+    {
+      "mint": "9esEPXighDtkP8urXJ7iy556XSHk14ntXZFpyEB5SAo6",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314867498
+    },
+    {
+      "mint": "N4sr2vfKGJ7ndGxqwWGBD1ef7BBJyqS5F9kDPUcpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314868191
+    },
+    {
+      "mint": "8aXiG5JxdnitCraVuaXPud13kpZw39qrBE67AJndpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314869969
+    },
+    {
+      "mint": "F634UJR4pJTQRFmw3bBLRAobPLw9xrmfUBN9NT2Hpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314873734
+    },
+    {
+      "mint": "6cDLteW3LqWdZMs7KbFt8mv4BuU9yFQyEyMcJe62BxzG",
+      "protocol": "raydium-launch",
+      "outcome": "skipped",
+      "skipReason": "raydium-launch_slots_full",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314874356
+    },
+    {
+      "mint": "4wjpZpyzNdaaME4E6Ux5aDVpHuNKfqWDpojKCfqLpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314874708
+    },
+    {
+      "mint": "BZoRpk8EgZzQpFAQxYASrzyU6Z1MQJDpq9BP724ipump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314880292
+    },
+    {
+      "mint": "EFnKXizvTLjctomCe9pknjsXhiML3XHnKtnfVMCzpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314884627
+    },
+    {
+      "mint": "FkCuiGvPxwGwBNjMzgh5kh2HMumbrY65gvwkieMTpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314887233
+    },
+    {
+      "mint": "D4XspGipJyyEvx1EkJpW6zyPvdwvVb2fzxFpehx4pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314887616
+    },
+    {
+      "mint": "Henpq47nHSFUcQxhHi8C5147qYwcZXvrmRuJgXtppump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314890376
+    },
+    {
+      "mint": "6MVveKGDAgNzThh254YUerYDsru5bb6qYzLkoyBopump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314891512
+    },
+    {
+      "mint": "Eot5iYGhNtPsohpNPTvwthnsvkcT7qWdmFymAxGJpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314893136
+    },
+    {
+      "mint": "GVSUKf6aP6tYwnw7fFzhuDZWJhGnndXamn1L1KwZpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314894060
+    },
+    {
+      "mint": "EMFNibcW4Sc1pMTSLxjVVkuo54kSCVSjvb6Z2nfbpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314900602
+    },
+    {
+      "mint": "Fm92pq8BQgX6vMN1FoY3wU8SBL77rB3ftZmSqCAQpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314901604
+    },
+    {
+      "mint": "5N4KPcDoNqB4TpPzto9qiAAbEkfvf1Ns9pdYtpHzpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314901776
+    },
+    {
+      "mint": "pWhYeCwrUov6NUymyXd1pBSrwFnz72GatSorS9tpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314901780
+    },
+    {
+      "mint": "5wNeVpzD6b3SycFNCY9XMVg8PQb2dThNbqpzs3E7pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314901851
+    },
+    {
+      "mint": "GmTK1tWprR1akrc8U9GNdEb1NtjC5yt8TuRG3NYhpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314901854
+    },
+    {
+      "mint": "BszFjZgVAH3CLwebUJvJVZnCjosHMDBxZ4v57Wwi5gGy",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314904377
+    },
+    {
+      "mint": "2GYFCv4ywoHww7PDKqYXwSeBqrTnLsyrkgrFkKTkEbp8",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314906019
+    },
+    {
+      "mint": "6pvDfNvq9VdWrt7vVCiDo6UiVVosKXZSS7CrSrq368HE",
+      "protocol": "raydium-cpmm",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314910156
+    },
+    {
+      "mint": "HvKtiAnn4jaNFxMeCEgo5PRUBMopzMKbjSvVQjDapump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314910391
+    },
+    {
+      "mint": "CLzrJwDfb7Unrc4ZdNNDmbx9dAtPtvuWvzGvw3PA2F25",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314914371
+    },
+    {
+      "mint": "4aT7BMT3N8JwZa44MCFWAKt5y7jvH4NkVmqrtcm9pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314917224
+    },
+    {
+      "mint": "BszFjZgVAH3CLwebUJvJVZnCjosHMDBxZ4v57Wwi5gGy",
+      "protocol": "pumpswap",
+      "outcome": "skipped",
+      "skipReason": "pool_unreadable",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314920206
+    },
+    {
+      "mint": "3GskdFGzQanzr7PR357mLxhL7jegEnKyP1Fx5K3fpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314921223
+    },
+    {
+      "mint": "GxGDiiyRGiT2ByC3Chu4xF4rbCtaLidNRaMB6iDRpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314921691
+    },
+    {
+      "mint": "Dt6gG8tXhR2ND8647sA2s6uNJv5XoMmxQ34RKdoJpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314922132
+    },
+    {
+      "mint": "1DWSCcxo2bq3DVhL6tBbh9Hg8aHnRZaC6S5ZF9Lpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314924107
+    },
+    {
+      "mint": "7HUv1ABJPF6h6SV1sJsjUbsKN6QYUbh8AVCEJuVjpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314927696
+    },
+    {
+      "mint": "B91RAFaMizq1L3xDfUadXaUWgGZEpJNXG6Zx8Yqypump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314928253
+    },
+    {
+      "mint": "J476S84mfrApB65ZWJ83xoPrFg4tXvF2fuKiQpHhpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314928476
+    },
+    {
+      "mint": "6mQawazedrE6g49beuDAo51rF2MH52dgYheUrB1zpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314932201
+    },
+    {
+      "mint": "ACzSvSdg8VocVTas9toKYUPsv2g8Xhpjs77N8xZMpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314932268
+    },
+    {
+      "mint": "EjV1hNnvXr91WMFFuWJH95J1514ehVTVvSxnJ1nMpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "creator_spam",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "unknown",
+      "safetySafe": true,
+      "detectedAt": 1777314932272
+    },
+    {
+      "mint": "9p6dqD2ExgMqaEPkKkCBHLGvLapSA9YjtdSFsqBmpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314934322
+    },
+    {
+      "mint": "BpgD4E4LLogCzDJGCZCiHCByC2KPyefP4hqGxkFUpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314934714
+    },
+    {
+      "mint": "3K7ypMdvASofkyiu3yRYvgfCsnivyzxwxmVZd9Yfpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314936909
+    },
+    {
+      "mint": "2Kg6zMqczYVrkC96FNiEfsckgBcvoBT95LufxALBpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314941085
+    },
+    {
+      "mint": "7pKUD27ZNAKaiNF6quXfhBKZi8RZkjXPsV6RFBmrpump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314941473
+    },
+    {
+      "mint": "3yGu8KGoCtJWZALa3eNvau2e3gCpRZ62RAxEbNi2pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314942794
+    },
+    {
+      "mint": "C7ResuU9ucBYXZCCkJKTRhcGeWmouCEnMug9k2GFLeAh",
+      "protocol": "pumpswap",
+      "outcome": "entered",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314943158
+    },
+    {
+      "mint": "9Yj8Rf9ALjKRMXqNiNWW8XtzvSVQf7MPdiLf5RB2pump",
+      "protocol": "pump.fun",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314948729
     }
   ],
   "detectedByProtocol": {
-    "pump.fun": 1260,
-    "raydium-ammv4": 89,
-    "pumpswap": 134,
-    "raydium-cpmm": 54,
-    "raydium-launch": 7
+    "pump.fun": 1353,
+    "raydium-ammv4": 90,
+    "pumpswap": 144,
+    "raydium-cpmm": 56,
+    "raydium-launch": 10
   },
   "skippedByReason": {
     "safety_failed": [
@@ -26433,6 +27726,480 @@
         "protocol": "raydium-ammv4",
         "tokenScore": 0,
         "socialScore": 0
+      },
+      {
+        "mint": "28NYyVd7ojCpo2uphRs3rUwysijkXtJ29FUqs65kpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9cJSRyiGfreKLbPVHXg41vqC1qBx685hLFg2FX6qpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "FqsziUXa4h4PFrrV6aepbpBysrs2rbtH5Degpy1Lpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "AokSoWriue5fTihvER2SeASPoQbLRgA9kDUT9yYnyTh8",
+        "protocol": "raydium-ammv4",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4RzryYXcZiTrFwV579Mh3rgYaWigToTsEmmG8xWcpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "52oCbGdc2eHkEppCovx6DpfNevj97v6z14svYde1pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BEXPNkQGnTTaAx9d1CZf3UJygbo8RKhqjtrN1k8CVeNg",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "FeBL86eFegqggPf9SZe2D1ayFS6BSChbZpVGDatkpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9uLR2AvTHmRNeNdnwa4s3vP7Q4syPvTsS979KcLppump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CJxAhwV8nnwrJMctDjvFpS7E1tBqmfALWvHbRC1Ypump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HvDp2tciGEPS5p8XhLeiG5CXWkWwqBMjyWPWhpgypump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "DRRR82uNkLKNFKTZ3g8MZpSjYCagMQzvwTDCfpLvpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "ESTGoXTToYbMWKFLgD8nfN48Ku4H9LHDKLQ3LLNqpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CjEh2Coyfib5xruRd4hBhNZ4XStz2ifCrUEnGShHpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Cjigqnt1AGafR7QMmthXixWKPGbSo8SLhkNeWdsUpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HkLE6TsT9XiNv5hLN1PzNBjtmbJW6UP5S55VAmGypump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "7myAH54yatvSpJhJanoveXeoa4EhjjUEDY9m8AVhpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HrA9A3yd31keL2qLRDu5TsyqiWikpyLTyfvrhYHGpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "F9HphzdPyVeh7qHnCakZbCACUSC6wTn5pPr9T7WUpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "3U5uiSQ7r87CKxhpaiATJ56856wc5UhkoLiVYY5Zpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "2qk2eMHkiLAnENKHuwWGdP75iGsVHqLj3gH6xkWupump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "8n4mF3F2RxNWERZSEHVxge47DFPpULyZXPkGr6Atpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GTa4QrLUAMJaqLBRkFb7DvLEGibkxmpS4cipfQSjpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HdUoChJCnmqFht7FMEBWQfhg1hT7pZgE87TY9PqZpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9stdYNAHYuzdjaRrzxzVKVzx5Tb2mBL7m1F2Kb7ajYBw",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4uXCoj43BuWXEKMGe2SeVBAU1nR6u3MM3fAJCfKXpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "J9rp8CiohXqDDBdzpQajxnFbTSTbVoVB13hA5EMpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "EudYggjsQ7yXjyQ74ttTuZvgo9SJaZTUC3FkCuSMpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CWTigfbFtYCTPSQZ4LTCEBp7nMXZvU5RNaYFmSxtpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "3QQBueTsYYafgMsRzjqoyi1W4ctPeVDmYQ2nh7CCpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "2sj615PyHj5sMbQWdUJ6XxG1Lm1qTga9nu6T9aJUpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "8BrEaWgXZdSpFXvXThvFdjganZpU1CHpE8VUaaqepump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "7Czr9nkMsGr5kknakBid3tozksk4w1848uP9bMeRpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HRc9B98SDWwRbazrsmZTSqTFMsexdMhRCz11hWqspump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "EY9vQeBbNWkDERex45kkyVUWngaKpGkyN8AuzHqPpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GyYQcbXavGoJKj1vFvDLtFHE8moxbfJdd5w3Quacpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "2zpnKKQrQLsXLrDVWsHsMnFELsVw1eG44CpiV7V2pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4JFcUJ1HfFKz2F8thdu2frk558EjrLvKEmeMq1ZM2xBP",
+        "protocol": "raydium-cpmm",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BhVZaD95MG3jB6WqA9pXthhqPkWumByQaA2NZ6W4pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "DVrWJCMmSwfnHnU47hBRczWLzJHU4nrRUy5Kq9UA1WDq",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "6VZfXGmvZm3xL7wcx8JQavmSrrHpSRqed8sSQRpLpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GrWfSWwBmmqKtdMCdVXXC7kCGoq6Su4bnqBpjnsbpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "z6mjPwQHH6XMFeihGbWBwU3k467nryVUTbQ59gdpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "24M4wKChfYTEco9XzKLu4ndSA2LubmrGJA9QvREMpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "39BNs9u9tfWXSmFmSWpdDGXWj9RWovoUGv5AiqpJpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "53cFykiYFMyD3dvvjoewkqWpnGTUJK8QwriJfigZpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "A47D2wzron9YDwmxbSwYmC1Eno1QxH6wjZ3Rc7GUMbm6",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "E1Y98dQpLrrs38eWsaZUpkPqfghUYzcb6LDE2TCLpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4XaBwGXgwEyfpQeLmB8VMshyHHzLj99KrGLQ6xFTpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "N4sr2vfKGJ7ndGxqwWGBD1ef7BBJyqS5F9kDPUcpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "8aXiG5JxdnitCraVuaXPud13kpZw39qrBE67AJndpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "F634UJR4pJTQRFmw3bBLRAobPLw9xrmfUBN9NT2Hpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4wjpZpyzNdaaME4E6Ux5aDVpHuNKfqWDpojKCfqLpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BZoRpk8EgZzQpFAQxYASrzyU6Z1MQJDpq9BP724ipump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "FkCuiGvPxwGwBNjMzgh5kh2HMumbrY65gvwkieMTpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "D4XspGipJyyEvx1EkJpW6zyPvdwvVb2fzxFpehx4pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Henpq47nHSFUcQxhHi8C5147qYwcZXvrmRuJgXtppump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "6MVveKGDAgNzThh254YUerYDsru5bb6qYzLkoyBopump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Eot5iYGhNtPsohpNPTvwthnsvkcT7qWdmFymAxGJpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GVSUKf6aP6tYwnw7fFzhuDZWJhGnndXamn1L1KwZpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "EMFNibcW4Sc1pMTSLxjVVkuo54kSCVSjvb6Z2nfbpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Fm92pq8BQgX6vMN1FoY3wU8SBL77rB3ftZmSqCAQpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "5wNeVpzD6b3SycFNCY9XMVg8PQb2dThNbqpzs3E7pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GmTK1tWprR1akrc8U9GNdEb1NtjC5yt8TuRG3NYhpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "6pvDfNvq9VdWrt7vVCiDo6UiVVosKXZSS7CrSrq368HE",
+        "protocol": "raydium-cpmm",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CLzrJwDfb7Unrc4ZdNNDmbx9dAtPtvuWvzGvw3PA2F25",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4aT7BMT3N8JwZa44MCFWAKt5y7jvH4NkVmqrtcm9pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GxGDiiyRGiT2ByC3Chu4xF4rbCtaLidNRaMB6iDRpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Dt6gG8tXhR2ND8647sA2s6uNJv5XoMmxQ34RKdoJpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "1DWSCcxo2bq3DVhL6tBbh9Hg8aHnRZaC6S5ZF9Lpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "B91RAFaMizq1L3xDfUadXaUWgGZEpJNXG6Zx8Yqypump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "J476S84mfrApB65ZWJ83xoPrFg4tXvF2fuKiQpHhpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9p6dqD2ExgMqaEPkKkCBHLGvLapSA9YjtdSFsqBmpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BpgD4E4LLogCzDJGCZCiHCByC2KPyefP4hqGxkFUpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "3K7ypMdvASofkyiu3yRYvgfCsnivyzxwxmVZd9Yfpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "2Kg6zMqczYVrkC96FNiEfsckgBcvoBT95LufxALBpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "7pKUD27ZNAKaiNF6quXfhBKZi8RZkjXPsV6RFBmrpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "3yGu8KGoCtJWZALa3eNvau2e3gCpRZ62RAxEbNi2pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9Yj8Rf9ALjKRMXqNiNWW8XtzvSVQf7MPdiLf5RB2pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
       }
     ],
     "vault_unreadable": [
@@ -26480,6 +28247,24 @@
       },
       {
         "mint": "GkXqRw2RuieQjbGnN8PAeUCNn72bSQns3edhpiE7UzEH",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "Dy8bsemH4KLQtdo1gDe3p39pEeqEstHzJyW7BrWhpzom",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "FZxkkK7JkKa51MtY77A7x1df6i75DoMcRcSzNMPvqeT2",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "GoBdw4D5ykJrxy2wZTuYEqZvoDMW1UXeNYALdcqT21Pm",
         "protocol": "pumpswap",
         "tokenScore": 0,
         "socialScore": 0
@@ -26986,6 +28771,42 @@
       },
       {
         "mint": "Cg1QGtJLcDYmh5NBE9UpngVYH1BiSAzaVCwSpmPQjAQy",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CPqtQ67crhokUyxc2bVuVqdgoQFHK3ywaJdeKUYze2YV",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9esEPXighDtkP8urXJ7iy556XSHk14ntXZFpyEB5SAo6",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "CPqtQ67crhokUyxc2bVuVqdgoQFHK3ywaJdeKUYze2YV",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "9esEPXighDtkP8urXJ7iy556XSHk14ntXZFpyEB5SAo6",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BszFjZgVAH3CLwebUJvJVZnCjosHMDBxZ4v57Wwi5gGy",
+        "protocol": "pumpswap",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "BszFjZgVAH3CLwebUJvJVZnCjosHMDBxZ4v57Wwi5gGy",
         "protocol": "pumpswap",
         "tokenScore": 0,
         "socialScore": 0
@@ -28107,6 +29928,114 @@
         "protocol": "pump.fun",
         "tokenScore": 0,
         "socialScore": 0
+      },
+      {
+        "mint": "BVLiB6hq13RT1T5kiVBfvvFjfSn3hm387Ngeerifpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "4fsS987zPUfGzZfFStE5rGwdLtDuLGiRRUj9W314pump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HE2zyJwbUkAxCS4T3UKTtRyyPF5ArmNSaoiQZFDwpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "FoXaYcqrVMkHX44ZJbnj6Pm9ZzdPQT8CW1XPT93bonk",
+        "protocol": "raydium-launch",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "62iAgqrS9jSkH7y9hxXe5qLymamUiBCKddoZ7zvvpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "92AHiHXjkFuBi1DBnoGDcrUoF7APHhCQMvkrk8Eopump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "G4Svv666C4BQsD9bZAAhmrVji5tHfsX1m5VZWHtApump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "qbhkUQ2q9mken5ayqi8G5uo4dcP5F1gbs7LEcZxpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "EFnKXizvTLjctomCe9pknjsXhiML3XHnKtnfVMCzpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "5N4KPcDoNqB4TpPzto9qiAAbEkfvf1Ns9pdYtpHzpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "pWhYeCwrUov6NUymyXd1pBSrwFnz72GatSorS9tpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "2GYFCv4ywoHww7PDKqYXwSeBqrTnLsyrkgrFkKTkEbp8",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "HvKtiAnn4jaNFxMeCEgo5PRUBMopzMKbjSvVQjDapump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "3GskdFGzQanzr7PR357mLxhL7jegEnKyP1Fx5K3fpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "7HUv1ABJPF6h6SV1sJsjUbsKN6QYUbh8AVCEJuVjpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "6mQawazedrE6g49beuDAo51rF2MH52dgYheUrB1zpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "ACzSvSdg8VocVTas9toKYUPsv2g8Xhpjs77N8xZMpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "EjV1hNnvXr91WMFFuWJH95J1514ehVTVvSxnJ1nMpump",
+        "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
       }
     ],
     "pumpfun_slots_full": [
@@ -28503,6 +30432,14 @@
       {
         "mint": "oHSWp1tZ7vYvcrHAB9em5ykcfZHSTnKziuSV9WLpump",
         "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      }
+    ],
+    "raydium-launch_slots_full": [
+      {
+        "mint": "6cDLteW3LqWdZMs7KbFt8mv4BuU9yFQyEyMcJe62BxzG",
+        "protocol": "raydium-launch",
         "tokenScore": 0,
         "socialScore": 0
       }

@@ -31,14 +31,14 @@ section
 ══ TREND_SKIP REASONS ══
 reason              protocol      count
 ------------------  ------------  -----
-rugcheck_high_risk  pump.fun      4515 
+rugcheck_high_risk  pump.fun      4586 
 safety_failed       raydium-cpmm  1147 
 section                
 -----------------------
 ══ ВОРОНКА КОНВЕРСИИ ══
 stage            count
 ---------------  -----
-TREND_SKIP       5662 
+TREND_SKIP       5733 
 TREND_TRACKED    0    
 TREND_CONFIRMED  0    
 BUY_SENT         0    
@@ -49,7 +49,7 @@ section
 ══ SOCIAL SIGNALS ══
 source       signals  unique_mints  alpha_signals
 -----------  -------  ------------  -------------
-telegram     3282     534           0            
+telegram     3288     535           0            
 dexscreener  581      327           0            
 twitter      165      51            0            
 section                   
@@ -97,26 +97,26 @@ section
 ══ EVENT TYPES ══
 type                           count
 -----------------------------  -----
-WALLET_ELIGIBLE                8822 
-TREND_SKIP                     5662 
-PRICE_TICK                     3842 
-SHADOW_RAYDIUM_AMMV4_RECOVERY  3458 
-SHADOW_RAYDIUM_CPMM_RECOVERY   1593 
-TREND_TIMEOUT                  1239 
-SHOULD_SELL_TRIGGER            915  
-TREND_CONFIRMED                554  
-SHADOW_TREND_CONFIRMED         540  
+WALLET_ELIGIBLE                8856 
+TREND_SKIP                     5733 
+PRICE_TICK                     3872 
+SHADOW_RAYDIUM_AMMV4_RECOVERY  3482 
+SHADOW_RAYDIUM_CPMM_RECOVERY   1599 
+TREND_TIMEOUT                  1248 
+SHOULD_SELL_TRIGGER            926  
+TREND_CONFIRMED                562  
+SHADOW_TREND_CONFIRMED         548  
 SHADOW_PARTIAL_SELL            529  
-TX_DIAGNOSTIC                  469  
-SHADOW_SIMULATION              431  
-SHADOW_BUY                     408  
-SHADOW_SELL                    389  
+TX_DIAGNOSTIC                  481  
+SHADOW_SIMULATION              437  
+SHADOW_BUY                     411  
+SHADOW_SELL                    400  
 SHADOW_SOCIAL_DISCOVERY        201  
-SHADOW_PUMPSWAP_INSTANT        180  
+SHADOW_PUMPSWAP_INSTANT        183  
 SHADOW_TREND_WEAKENING         70   
 TREND_WEAKENING                70   
 SHADOW_COPY_TRADE              51   
-SHADOW_TX_BUILD_FAILED         38   
+SHADOW_TX_BUILD_FAILED         44   
 SHADOW_TREND_STRENGTHENING     14   
 TREND_STRENGTHENING            14   
 SHADOW_STARTED                 9    
@@ -130,9 +130,9 @@ section
 ══ SHADOW TRADES ══
 profile       trades  wr_pct  avg_pnl_pct  pnl_sol
 ------------  ------  ------  -----------  -------
-aggressive    346     9.5     77814.59     -7.4514
-balanced      346     9.0     76324.81     -3.8166
-conservative  344     9.0     73768.75     -2.1352
+aggressive    347     9.8     77592.03     -6.6504
+balanced      347     9.2     76106.53     -3.4182
+conservative  345     9.0     73554.89     -2.0693
 section         
 ----------------
 ══ AUTO-ALPHA ══
