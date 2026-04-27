@@ -425,10 +425,7 @@ export class ShadowEngine extends EventEmitter {
       return;
     }
 
-    if (pipelineResult.rugcheckRisk === 'high') {
-      this.recordSkip('rugcheck_high', mint, 'pumpswap');
-      return;
-    }
+    // Rugcheck is already handled in pipeline with protocol-aware logic (PumpSwap relaxed)
 
     logger.info(`[shadow] ⚡ PUMPSWAP INSTANT: ${mint.slice(0, 8)} (rug=${pipelineResult.rugcheckRisk}, score=${pipelineResult.tokenScore})`);
     logEvent('SHADOW_PUMPSWAP_INSTANT', { mint, rugRisk: pipelineResult.rugcheckRisk, tokenScore: pipelineResult.tokenScore });
@@ -884,6 +881,10 @@ export class ShadowEngine extends EventEmitter {
         logger.debug(`[shadow] raydium-cpmm-recovery ${mint.slice(0,8)} low liq ${solReserveSol.toFixed(3)} SOL, skip`);
         return;
       }
+      if (solReserveSol > 200) {
+        logger.debug(`[shadow] raydium-cpmm-recovery ${mint.slice(0,8)} high liq ${solReserveSol.toFixed(0)} SOL, skip established`);
+        return;
+      }
 
       this.raydiumPoolToMint.set(poolId.toBase58(), { mint, protocol: 'raydium-cpmm' });
       this.seenMints.set(mint, Date.now());
@@ -936,6 +937,11 @@ export class ShadowEngine extends EventEmitter {
       const solReserveSol = Number(resolved.solReserve) / 1e9;
       if (solReserveSol < config.strategy.raydiumAmmV4.minLiquiditySol) {
         logger.debug(`[shadow] raydium-ammv4-recovery ${mintStr.slice(0,8)} low liq ${solReserveSol.toFixed(3)} SOL, skip`);
+        return;
+      }
+      // Skip established pools — only trade fresh AMM v4 pools (< 200 SOL liquidity)
+      if (solReserveSol > 200) {
+        logger.debug(`[shadow] raydium-ammv4-recovery ${mintStr.slice(0,8)} high liq ${solReserveSol.toFixed(0)} SOL, skip established`);
         return;
       }
 
@@ -1372,10 +1378,21 @@ export class ShadowEngine extends EventEmitter {
     const quoteVault = new PublicKey(info.data.subarray(171, 203)).toBase58();
     const isMemeBase = baseMint === mint;
 
-    const vaultInfos = await this.connection.getMultipleAccountsInfo([
+    let vaultInfos = await this.connection.getMultipleAccountsInfo([
       new PublicKey(baseVault), new PublicKey(quoteVault),
     ]);
-    if (!vaultInfos[0] || !vaultInfos[1]) { this.recordSkip('vault_unreadable', mint, 'pumpswap'); return; }
+    if (!vaultInfos[0] || !vaultInfos[1]) {
+      // RPC lags behind gRPC — retry after 300ms, then 700ms
+      for (const delayMs of [300, 700]) {
+        await new Promise(r => setTimeout(r, delayMs));
+        vaultInfos = await this.connection.getMultipleAccountsInfo([
+          new PublicKey(baseVault), new PublicKey(quoteVault),
+        ]);
+        if (vaultInfos[0] && vaultInfos[1]) break;
+      }
+      if (!vaultInfos[0] || !vaultInfos[1]) { this.recordSkip('vault_unreadable', mint, 'pumpswap'); return; }
+      logger.debug(`[shadow] vault retry succeeded for ${mint.slice(0, 8)}`);
+    }
 
     const baseBalance = Number(vaultInfos[0].data.readBigUInt64LE(64));
     const quoteBalance = Number(vaultInfos[1].data.readBigUInt64LE(64));
@@ -1413,10 +1430,20 @@ export class ShadowEngine extends EventEmitter {
     const vaultA = new PublicKey(info.data.subarray(vaultAOffset, vaultAOffset + 32)).toBase58();
     const vaultB = new PublicKey(info.data.subarray(vaultBOffset, vaultBOffset + 32)).toBase58();
 
-    const vaultInfos = await this.connection.getMultipleAccountsInfo([
+    let vaultInfos = await this.connection.getMultipleAccountsInfo([
       new PublicKey(vaultA), new PublicKey(vaultB),
     ]);
-    if (!vaultInfos[0] || !vaultInfos[1]) { this.recordSkip('vault_unreadable', mint, protocol); return; }
+    if (!vaultInfos[0] || !vaultInfos[1]) {
+      for (const delayMs of [300, 700]) {
+        await new Promise(r => setTimeout(r, delayMs));
+        vaultInfos = await this.connection.getMultipleAccountsInfo([
+          new PublicKey(vaultA), new PublicKey(vaultB),
+        ]);
+        if (vaultInfos[0] && vaultInfos[1]) break;
+      }
+      if (!vaultInfos[0] || !vaultInfos[1]) { this.recordSkip('vault_unreadable', mint, protocol); return; }
+      logger.debug(`[shadow] vault retry succeeded for ${mint.slice(0, 8)} (${protocol})`);
+    }
 
     const balA = Number(vaultInfos[0].data.readBigUInt64LE(64));
     const balB = Number(vaultInfos[1].data.readBigUInt64LE(64));
@@ -1424,7 +1451,18 @@ export class ShadowEngine extends EventEmitter {
     let tokenReserve: number, solReserve: number, isMemeBase: boolean;
     if (balA > 1e12 && balB < 1e12) { tokenReserve = balA; solReserve = balB; isMemeBase = true; }
     else if (balB > 1e12 && balA < 1e12) { tokenReserve = balB; solReserve = balA; isMemeBase = false; }
-    else { this.recordSkip('cant_determine_base_quote', mint, protocol); return; }
+    else {
+      // Both vaults have similar magnitude — try using owner/mint to determine base/quote.
+      // For deep-liquidity pools (>1000 SOL), both balances can be > 1e12.
+      // Heuristic: the vault with MORE tokens is likely the meme (higher supply).
+      if (balA > 0 && balB > 0) {
+        if (balA >= balB) { tokenReserve = balA; solReserve = balB; isMemeBase = true; }
+        else { tokenReserve = balB; solReserve = balA; isMemeBase = false; }
+        logger.debug(`[shadow] ${mint.slice(0, 8)}: base/quote ambiguous (${balA}/${balB}), using heuristic`);
+      } else {
+        this.recordSkip('cant_determine_base_quote', mint, protocol); return;
+      }
+    }
 
     const price = (solReserve / 1e9) / (tokenReserve / 1e6);
     if (price <= 0 || !isFinite(price)) { this.recordSkip('invalid_price', mint, protocol); return; }

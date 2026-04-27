@@ -115,10 +115,10 @@ export const config = {
 
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
-    maxPositions:         8,         // 4→8: расширяем для multi-protocol coverage (3+2+2+2+2+3CT)
+    maxPositions:         10,        // 8→10: 5 PumpSwap + 3 pump.fun + 2 Raydium + 2 CT
     maxPumpFunPositions:  3,         // 1→3: pump.fun был полностью заблокирован, даём шанс
     maxPumpSwapPositions: 5,         // 4→5: PumpSwap единственный +EV протокол (43% WR shadow)
-    maxTotalExposureSol:  2.5,       // 2.0→2.5: headroom для 5 PumpSwap×0.15 + Raydium + CT
+    maxTotalExposureSol:  3.0,       // 2.5→3.0: headroom для 5 PumpSwap×0.15 + pump.fun + Raydium + CT
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
     minBalanceToTradeSol: 0,         // disabled: торгуем до нуля пока отлаживаем стратегию
 
