@@ -29,6 +29,7 @@ Thumbs.db
 # Logs
 logs/
 logs-snapshot/
+logs-export/
 pool.log
 pools.log
 

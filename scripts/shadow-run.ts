@@ -130,18 +130,32 @@ app.post('/api/shadow/export-logs', async (_req, res) => {
     const gitFiles = [
       'data/shadow-report.json',
       'data/shadow-snapshots.json',
-      'logs-export/all-logs.tar.gz',
-      'logs-export/sniper.db',
-      'logs-export/positions.json',
       'logs-export/wr-analysis.txt',
     ].filter(f => fs.existsSync(path.resolve(root, f)));
 
+    if (gitFiles.length === 0) {
+      res.json({ ok: true, pushed: false, reason: 'no files to push' });
+      return;
+    }
+
     execSync(`git add -f ${gitFiles.join(' ')}`, { cwd: root });
     execSync(`git commit -m "chore: shadow export ${ts}"`, { cwd: root });
-    execSync(`git push origin HEAD`, { cwd: root, timeout: 60000 });
 
-    logger.info(`[shadow] Export pushed to git (${gitFiles.length} files)`);
-    res.json({ ok: true, pushed: true, files: gitFiles });
+    let pushed = false;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        execSync(`git push origin HEAD`, { cwd: root, timeout: 60000 });
+        pushed = true;
+        break;
+      } catch (pushErr) {
+        const wait = Math.pow(2, attempt + 1) * 1000;
+        logger.warn(`[shadow] git push attempt ${attempt + 1} failed, retrying in ${wait / 1000}s`);
+        execSync(`sleep ${wait / 1000}`);
+      }
+    }
+
+    logger.info(`[shadow] Export ${pushed ? 'pushed' : 'committed locally'} (${gitFiles.length} files)`);
+    res.json({ ok: true, pushed, files: gitFiles });
   } catch (err) {
     logger.error(`[shadow] export-logs error: ${err}`);
     res.status(500).json({ error: String(err) });
