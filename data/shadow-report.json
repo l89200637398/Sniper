@@ -1,132 +1,77 @@
 {
   "running": true,
   "startedAt": 1777311474814,
-  "uptimeMs": 3173568,
+  "uptimeMs": 3245007,
   "profiles": [
     {
       "name": "conservative",
       "label": "Conservative (0.05 SOL)",
-      "balance": 9.889705624117939,
+      "balance": 9.956993444817938,
       "startBalance": 10,
-      "openPositions": 2,
-      "closedTrades": 46,
+      "openPositions": 0,
+      "closedTrades": 48,
       "wins": 7,
-      "winRate": 15.217391304347828,
-      "totalPnlSol": -0.014662349848082658,
-      "exposure": 0.06999999999999999,
-      "positions": [
-        {
-          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
-          "protocol": "pumpswap",
-          "entryPrice": 0.00011335184013634631,
-          "currentPrice": 0.00011335184013634631,
-          "pnlPercent": 0,
-          "entrySol": 0.034999999999999996,
-          "durationMs": 12063
-        },
-        {
-          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
-          "protocol": "pump.fun",
-          "entryPrice": 2.959153235981363e-8,
-          "currentPrice": 2.959153235981363e-8,
-          "pnlPercent": 0,
-          "entrySol": 0.034999999999999996,
-          "durationMs": 3922
-        }
-      ]
+      "winRate": 14.583333333333334,
+      "totalPnlSol": -0.017374529148082657,
+      "exposure": 0,
+      "positions": []
     },
     {
       "name": "balanced",
       "label": "Balanced (0.10 SOL)",
-      "balance": 19.727189853926344,
+      "balance": 19.863765495326344,
       "startBalance": 20,
-      "openPositions": 3,
-      "closedTrades": 45,
+      "openPositions": 1,
+      "closedTrades": 47,
       "wins": 6,
-      "winRate": 13.333333333333334,
-      "totalPnlSol": -0.14712026150455332,
-      "exposure": 0.17815437499999998,
+      "winRate": 12.76595744680851,
+      "totalPnlSol": -0.15054462010455333,
+      "exposure": 0.03815437499999999,
       "positions": [
         {
           "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
           "protocol": "pumpswap",
           "entryPrice": 0.000030211053968023294,
-          "currentPrice": 0.0003288658021379434,
-          "pnlPercent": 988.561168657106,
+          "currentPrice": 0.00035666077562779346,
+          "pnlPercent": 1080.5638294026382,
           "entrySol": 0.03815437499999999,
-          "durationMs": 1474216
-        },
-        {
-          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
-          "protocol": "pumpswap",
-          "entryPrice": 0.00011335184013634631,
-          "currentPrice": 0.00011335184013634631,
-          "pnlPercent": 0,
-          "entrySol": 0.06999999999999999,
-          "durationMs": 12061
-        },
-        {
-          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
-          "protocol": "pump.fun",
-          "entryPrice": 2.959153235981363e-8,
-          "currentPrice": 2.959153235981363e-8,
-          "pnlPercent": 0,
-          "entrySol": 0.06999999999999999,
-          "durationMs": 3919
+          "durationMs": 1545655
         }
       ]
     },
     {
       "name": "aggressive",
       "label": "Aggressive (0.20 SOL)",
-      "balance": 39.56170123346056,
+      "balance": 39.83685251626056,
       "startBalance": 40,
-      "openPositions": 3,
-      "closedTrades": 45,
+      "openPositions": 1,
+      "closedTrades": 47,
       "wins": 6,
-      "winRate": 13.333333333333334,
-      "totalPnlSol": -0.2509189974013579,
-      "exposure": 0.35630874999999995,
+      "winRate": 12.76595744680851,
+      "totalPnlSol": -0.25576771460135794,
+      "exposure": 0.07630874999999998,
       "positions": [
         {
           "mint": "5xgCS9xAjH1AnGh2uWccm85XZEHB2RW3zKSoioQoXJF1",
           "protocol": "pumpswap",
           "entryPrice": 0.000030211053968023294,
-          "currentPrice": 0.0003288658021379434,
-          "pnlPercent": 988.561168657106,
+          "currentPrice": 0.00035666077562779346,
+          "pnlPercent": 1080.5638294026382,
           "entrySol": 0.07630874999999998,
-          "durationMs": 1474216
-        },
-        {
-          "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
-          "protocol": "pumpswap",
-          "entryPrice": 0.00011335184013634631,
-          "currentPrice": 0.00011335184013634631,
-          "pnlPercent": 0,
-          "entrySol": 0.13999999999999999,
-          "durationMs": 12060
-        },
-        {
-          "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
-          "protocol": "pump.fun",
-          "entryPrice": 2.959153235981363e-8,
-          "currentPrice": 2.959153235981363e-8,
-          "pnlPercent": 0,
-          "entrySol": 0.13999999999999999,
-          "durationMs": 3916
+          "durationMs": 1545655
         }
       ]
     }
   ],
   "eventCounts": {
-    "detected": 3026,
+    "detected": 3035,
     "entered": 144,
-    "exited": 136,
-    "skipped": 1495
+    "exited": 142,
+    "skipped": 1496
   },
   "trendSkipReasons": {
     "safety_failed": 29,
-    "rugcheck_high_risk": 1124,
+    "rugcheck_high_risk": 1125,
     "vault_unreadable": 8,
     "pool_unreadable": 84,
     "creator_spam": 186,
@@ -2450,6 +2395,108 @@
       "openedAt": 1777313859996,
       "closedAt": 1777314580445,
       "feesSol": 0.002
+    },
+    {
+      "profile": "conservative",
+      "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+      "protocol": "pumpswap",
+      "entrySol": 0.034999999999999996,
+      "exitSol": 0.03364391034999999,
+      "entryPrice": 0.00011335184013634631,
+      "exitPrice": 0.00011335184013634631,
+      "pnlPct": -3.8745418571428667,
+      "pnlSol": -0.001356089650000003,
+      "maxPnlPct": 0,
+      "exitReason": "dead_volume",
+      "durationMs": 79507,
+      "openedAt": 1777314636319,
+      "closedAt": 1777314715826,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "balanced",
+      "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+      "protocol": "pumpswap",
+      "entrySol": 0.06999999999999999,
+      "exitSol": 0.06828782069999999,
+      "entryPrice": 0.00011335184013634631,
+      "exitPrice": 0.00011335184013634631,
+      "pnlPct": -2.445970428571436,
+      "pnlSol": -0.0017121793000000052,
+      "maxPnlPct": 0,
+      "exitReason": "dead_volume",
+      "durationMs": 79507,
+      "openedAt": 1777314636321,
+      "closedAt": 1777314715828,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "aggressive",
+      "mint": "5ZLr8qv8WMEp5HduBoy1TqEgdm3b1ymYMA8EhZEKpump",
+      "protocol": "pumpswap",
+      "entrySol": 0.13999999999999999,
+      "exitSol": 0.13757564139999998,
+      "entryPrice": 0.00011335184013634631,
+      "exitPrice": 0.00011335184013634631,
+      "pnlPct": -1.7316847142857212,
+      "pnlSol": -0.0024243586000000095,
+      "maxPnlPct": 0,
+      "exitReason": "dead_volume",
+      "durationMs": 79507,
+      "openedAt": 1777314636322,
+      "closedAt": 1777314715829,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "conservative",
+      "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+      "protocol": "pump.fun",
+      "entrySol": 0.034999999999999996,
+      "exitSol": 0.03364391035,
+      "entryPrice": 2.959153235981363e-8,
+      "exitPrice": 2.959153235981363e-8,
+      "pnlPct": -3.8745418571428463,
+      "pnlSol": -0.001356089649999996,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 71371,
+      "openedAt": 1777314644460,
+      "closedAt": 1777314715831,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "balanced",
+      "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+      "protocol": "pump.fun",
+      "entrySol": 0.06999999999999999,
+      "exitSol": 0.0682878207,
+      "entryPrice": 2.959153235981363e-8,
+      "exitPrice": 2.959153235981363e-8,
+      "pnlPct": -2.445970428571416,
+      "pnlSol": -0.0017121792999999913,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 71369,
+      "openedAt": 1777314644463,
+      "closedAt": 1777314715832,
+      "feesSol": 0.002
+    },
+    {
+      "profile": "aggressive",
+      "mint": "DUBMHBgfTge1Ab5EhiuwzNH2WAWF2KrDtTKJziuMpump",
+      "protocol": "pump.fun",
+      "entrySol": 0.13999999999999999,
+      "exitSol": 0.1375756414,
+      "entryPrice": 2.959153235981363e-8,
+      "exitPrice": 2.959153235981363e-8,
+      "pnlPct": -1.7316847142857015,
+      "pnlSol": -0.0024243585999999817,
+      "maxPnlPct": 0,
+      "exitReason": "stagnation",
+      "durationMs": 71367,
+      "openedAt": 1777314644466,
+      "closedAt": 1777314715833,
+      "feesSol": 0.002
     }
   ],
   "bestTrade": {
@@ -2486,12 +2533,12 @@
     "closedAt": 1777313668361,
     "feesSol": 0.002
   },
-  "avgDurationMs": 124122.97794117648,
+  "avgDurationMs": 122065.8661971831,
   "protocolBreakdown": {
     "pump.fun": {
-      "count": 75,
+      "count": 78,
       "wins": 11,
-      "pnlSol": -0.28347085194658145
+      "pnlSol": -0.2889634794965814
     },
     "raydium-ammv4": {
       "count": 18,
@@ -2509,9 +2556,9 @@
       "pnlSol": -0.032955765299999815
     },
     "pumpswap": {
-      "count": 19,
+      "count": 22,
       "wins": 8,
-      "pnlSol": -0.050906896284166794
+      "pnlSol": -0.05639952383416681
     }
   },
   "detectedTokens": [
@@ -19439,11 +19486,22 @@
       "rugcheckRisk": "unknown",
       "safetySafe": true,
       "detectedAt": 1777314644460
+    },
+    {
+      "mint": "C7X9S1JKrVN1uYfgHgXjoVhGNWTbg6u2Lc7RuYBWuRJ",
+      "protocol": "raydium-ammv4",
+      "outcome": "skipped",
+      "skipReason": "rugcheck_high_risk",
+      "tokenScore": 0,
+      "socialScore": 0,
+      "rugcheckRisk": "high",
+      "safetySafe": true,
+      "detectedAt": 1777314718771
     }
   ],
   "detectedByProtocol": {
     "pump.fun": 1260,
-    "raydium-ammv4": 88,
+    "raydium-ammv4": 89,
     "pumpswap": 134,
     "raydium-cpmm": 54,
     "raydium-launch": 7
@@ -26367,6 +26425,12 @@
       {
         "mint": "9fFnqWozvuJD5i1EoB6S3YFyX33XQwtF8ccQcwg4pump",
         "protocol": "pump.fun",
+        "tokenScore": 0,
+        "socialScore": 0
+      },
+      {
+        "mint": "C7X9S1JKrVN1uYfgHgXjoVhGNWTbg6u2Lc7RuYBWuRJ",
+        "protocol": "raydium-ammv4",
         "tokenScore": 0,
         "socialScore": 0
       }
