@@ -1,0 +1,98 @@
+// src/infra/bloxroute.ts
+//
+// Параллельная отправка sell через bloXroute Trader API (бесплатный тариф).
+// Отправляет уже подписанную сериализованную транзакцию через bloXroute BDN
+// параллельно с основным RPC/Jito каналом.
+//
+// Используется как fire-and-forget: если bloXroute приземлит TX раньше — отлично,
+// если нет — основной канал всё равно работает.
+// Портировано из HISTORY_DEV_SNIPER.
+
+import { PublicKey, SystemProgram, TransactionInstruction } from '@solana/web3.js';
+import { logger } from '../utils/logger';
+
+const BLOXROUTE_ENDPOINT = process.env.BLOXROUTE_ENDPOINT ?? 'https://ny.solana.dex.blxrbdn.com/api/v2/submit';
+const AUTH_HEADER = process.env.BLOXROUTE_AUTH_HEADER ?? '';
+const TIP_WALLET = process.env.BLOXROUTE_TIP_WALLET ?? '';
+const TIP_LAMPORTS = BigInt(process.env.BLOXROUTE_TIP_LAMPORTS ?? '1000000'); // 0.001 SOL min per bloXroute docs
+
+let cachedTipPubkey: PublicKey | null = null;
+function getTipPubkey(): PublicKey | null {
+  if (!TIP_WALLET) return null;
+  if (!cachedTipPubkey) {
+    try { cachedTipPubkey = new PublicKey(TIP_WALLET); }
+    catch (e: any) { logger.warn(`[bloxroute] Invalid BLOXROUTE_TIP_WALLET: ${e?.message ?? e}`); return null; }
+  }
+  return cachedTipPubkey;
+}
+
+/**
+ * Возвращает SystemProgram.transfer инструкцию на tip-кошелёк bloXroute.
+ * bloXroute Trader API требует, чтобы каждая отправляемая через них транзакция
+ * содержала перевод ≥0.001 SOL на один из их tip-кошельков, иначе BDN отклоняет tx.
+ * Возвращает null, если tip не настроен — в этом случае bloXroute отключён.
+ */
+export function getBloXrouteTipInstruction(payer: PublicKey): TransactionInstruction | null {
+  const tip = getTipPubkey();
+  if (!tip) return null;
+  return SystemProgram.transfer({
+    fromPubkey: payer,
+    toPubkey: tip,
+    lamports: Number(TIP_LAMPORTS),
+  });
+}
+
+export function isBloXrouteTipConfigured(): boolean {
+  return !!AUTH_HEADER && !!getTipPubkey();
+}
+
+/**
+ * Отправляет подписанную транзакцию через bloXroute Trader API.
+ * Не бросает исключений — логирует ошибки и возвращает null при неудаче.
+ */
+export async function sendViaBloXroute(serializedTx: Buffer | Uint8Array): Promise<string | null> {
+  if (!AUTH_HEADER) {
+    logger.debug('[bloxroute] BLOXROUTE_AUTH_HEADER not set, skipping');
+    return null;
+  }
+
+  try {
+    const base64Tx = Buffer.from(serializedTx).toString('base64');
+
+    const response = await fetch(BLOXROUTE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': AUTH_HEADER,
+      },
+      body: JSON.stringify({
+        transaction: { content: base64Tx },
+        skipPreFlight: true,
+        frontRunningProtection: false,
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => 'no body');
+      logger.debug(`[bloxroute] Submit failed (${response.status}): ${text}`);
+      return null;
+    }
+
+    const data = await response.json() as { signature?: string };
+    if (data.signature) {
+      logger.info(`[bloxroute] TX submitted: ${data.signature.slice(0, 8)}...`);
+      return data.signature;
+    }
+
+    logger.debug(`[bloxroute] No signature in response: ${JSON.stringify(data)}`);
+    return null;
+  } catch (err: any) {
+    logger.debug(`[bloxroute] Submit error: ${err?.message ?? err}`);
+    return null;
+  }
+}
+
+export function isBloXrouteEnabled(): boolean {
+  return !!AUTH_HEADER && !!getTipPubkey();
+}

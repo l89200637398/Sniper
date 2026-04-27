@@ -1,0 +1,65 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+*.log
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Runtime PID file (written by src/index.ts, used by scripts/stop.ts)
+.sniper.pid
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+logs-snapshot/
+pool.log
+pools.log
+
+# Analysis runs (local data, not for VCS)
+analysis-run*/
+
+# Session data (exports, snapshots — никогда в VCS)
+session-data/
+
+# SQLite databases and runtime data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/positions.json
+data/wallet-tracker.json
+data/runtime-config.json
+data/prelaunch.json
+*.jsonl
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+
+# Editor / merge artifacts — никогда не коммитим
+*.backup
+*.rej
+*.orig
+# SQLite temp files
+*.db-shm
+*.db-wal

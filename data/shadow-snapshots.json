@@ -1,0 +1,92 @@
+{
+  "running": false,
+  "startedAt": 1777277820758,
+  "uptimeMs": 6300544,
+  "profiles": [
+    {
+      "name": "conservative",
+      "label": "Conservative (0.05 SOL)",
+      "balance": 9.978026106382973,
+      "startBalance": 10,
+      "openPositions": 1,
+      "closedTrades": 13,
+      "wins": 4,
+      "winRate": 30.76923076923077,
+      "totalPnlSol": 0.0140182499583049,
+      "exposure": 0.026249999999999996,
+      "positions": [
+        {
+          "mint": "DUhz4T3YfwibKwEoTNj2GoFw95LULUpWyjUssC75wwYU",
+          "protocol": "pumpswap",
+          "entryPrice": 0.000002781146171002844,
+          "currentPrice": 0.0000035143769154943576,
+          "pnlPercent": 26.364336838402142,
+          "entrySol": 0.026249999999999996,
+          "durationMs": 190252
+        }
+      ]
+    },
+    {
+      "name": "balanced",
+      "label": "Balanced (0.10 SOL)",
+      "balance": 20.27097988277663,
+      "startBalance": 20,
+      "openPositions": 1,
+      "closedTrades": 13,
+      "wins": 5,
+      "winRate": 38.46153846153847,
+      "totalPnlSol": 0.2794070087232259,
+      "exposure": 0.05249999999999999,
+      "positions": [
+        {
+          "mint": "DUhz4T3YfwibKwEoTNj2GoFw95LULUpWyjUssC75wwYU",
+          "protocol": "pumpswap",
+          "entryPrice": 0.000002781146171002844,
+          "currentPrice": 0.0000035143769154943576,
+          "pnlPercent": 26.364336838402142,
+          "entrySol": 0.05249999999999999,
+          "durationMs": 190251
+        }
+      ]
+    },
+    {
+      "name": "aggressive",
+      "label": "Aggressive (0.20 SOL)",
+      "balance": 40.653851400965245,
+      "startBalance": 40,
+      "openPositions": 1,
+      "closedTrades": 13,
+      "wins": 5,
+      "winRate": 38.46153846153847,
+      "totalPnlSol": 0.6327709290514848,
+      "exposure": 0.10499999999999998,
+      "positions": [
+        {
+          "mint": "DUhz4T3YfwibKwEoTNj2GoFw95LULUpWyjUssC75wwYU",
+          "protocol": "pumpswap",
+          "entryPrice": 0.000002781146171002844,
+          "currentPrice": 0.0000035143769154943576,
+          "pnlPercent": 26.364336838402142,
+          "entrySol": 0.10499999999999998,
+          "durationMs": 190250
+        }
+      ]
+    }
+  ],
+  "eventCounts": {
+    "detected": 3174,
+    "entered": 42,
+    "exited": 39,
+    "skipped": 2233
+  },
+  "trendSkipReasons": {
+    "rugcheck_high_risk": 1166,
+    "vault_unreadable": 7,
+    "safety_failed": 476,
+    "raydium-ammv4_slots_full": 11,
+    "pool_unreadable": 64,
+    "creator_spam": 496,
+    "no_entry_context": 9,
+    "cant_determine_base_quote": 4
+  }
+}

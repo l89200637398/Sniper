@@ -1,0 +1,1003 @@
+// src/geyser/client.ts
+import { EventEmitter } from 'events';
+import { PublicKey } from '@solana/web3.js';
+import * as grpc from '@grpc/grpc-js';
+import * as protoLoader from '@grpc/proto-loader';
+import { config } from '../config';
+import path from 'path';
+import bs58 from 'bs58';
+import { logger } from '../utils/logger';
+import {
+    PUMP_FUN_PROGRAM_ID, PUMP_SWAP_PROGRAM_ID, DISCRIMINATOR, PUMP_FUN_ROUTER_PROGRAM_ID,
+    RAYDIUM_LAUNCHLAB_PROGRAM_ID, RAYDIUM_CPMM_PROGRAM_ID, RAYDIUM_AMM_V4_PROGRAM_ID,
+    RAYDIUM_FEE_DESTINATION, RAYDIUM_DISCRIMINATOR,
+} from '../constants';
+
+
+const PROTO_PATH = path.join(__dirname, '../../proto/geyser.proto');
+const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+    keepCase: false,
+    longs: String,
+    enums: String,
+    defaults: true,
+    oneofs: true,
+});
+const geyserProto: any = grpc.loadPackageDefinition(packageDefinition).geyser;
+
+// --- Интерфейсы ---
+export interface PumpToken { mint: string; creator: string; bondingCurve: string; bondingCurveTokenAccount: string; signature: string; receivedAt: number; slot?: number; }
+export interface PumpBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; programIds: string[]; signature: string; slot?: number; }
+export interface PumpSwapNewPool { mint: string; pool: string; creator: string; quoteMint: string; signature: string; }
+export interface PumpSwapBuy { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
+export interface PumpSwapSell { mint: string; creator: string; amount: bigint; solLamports: bigint; signature: string; }
+export interface PumpFunSell { mint: string; seller: string; amount: bigint; solLamports: bigint; signature: string; }
+
+// --- Raydium интерфейсы ---
+export interface RaydiumLaunchCreate { mint: string; pool: string; creator: string; signature: string; receivedAt: number; }
+export interface RaydiumLaunchBuy { mint: string; pool: string; buyer: string; amountSol: bigint; signature: string; }
+export interface RaydiumLaunchSell { mint: string; pool: string; seller: string; amountTokens: bigint; signature: string; }
+export interface RaydiumCpmmNewPool { mint: string; pool: string; creator: string; signature: string; }
+export interface RaydiumAmmV4NewPool { pool: string; baseMint: string; quoteMint: string; signature: string; }
+export interface RaydiumCpmmSwap { pool: string; inputMint: string; outputMint: string; user: string; amountIn: bigint; signature: string; }
+// userInputAta: позволяет sniper'у отличить buy от sell (если inputAta == wSOL ATA пользователя → buy, иначе sell).
+export interface RaydiumAmmV4Swap { pool: string; user: string; userInputAta: string; amountIn: bigint; signature: string; }
+
+// uint64 max = sentinel/overflow → не использовать как торговое значение
+const U64_MAX = 18446744073709551615n;
+function sanitizeAmount(val: bigint): bigint {
+    return val === U64_MAX ? 0n : val;
+}
+
+function pubkeyToBuffer(pubkey: any): Buffer | null {
+    try {
+        if (!pubkey) return null;
+        if (Buffer.isBuffer(pubkey)) return pubkey;
+        if (pubkey instanceof Uint8Array) return Buffer.from(pubkey);
+        if (pubkey.data && pubkey.data instanceof Uint8Array) return Buffer.from(pubkey.data);
+        if (pubkey.toBuffer && typeof pubkey.toBuffer === 'function') return pubkey.toBuffer();
+        if (typeof pubkey === 'string') return Buffer.from(pubkey, 'base64');
+        if (pubkey.length && typeof pubkey !== 'string') return Buffer.from(Array.from(pubkey));
+        logger.error('Cannot convert pubkey to buffer, unknown format:', pubkey);
+        return null;
+    } catch (err) {
+        logger.error('Error converting pubkey to buffer:', err);
+        return null;
+    }
+}
+
+export class GeyserClient extends EventEmitter {
+    private client: any;
+    private stream: any;
+    private running = false;
+    private reconnectAttempts = 0;
+    private reconnectTimer: NodeJS.Timeout | null = null;
+    private dataReceived = false;
+    private static readonly MAX_RECONNECT_BEFORE_RESET = 50;
+    private readonly PUMP_PROGRAM = PUMP_FUN_PROGRAM_ID;
+    private readonly PUMP_SWAP = PUMP_SWAP_PROGRAM_ID;
+    private readonly PUMP_ROUTER = PUMP_FUN_ROUTER_PROGRAM_ID;
+    private readonly RAYDIUM_LAUNCH = RAYDIUM_LAUNCHLAB_PROGRAM_ID;
+    private readonly RAYDIUM_CPMM = RAYDIUM_CPMM_PROGRAM_ID;
+    private readonly RAYDIUM_AMM_V4 = RAYDIUM_AMM_V4_PROGRAM_ID;
+    private readonly RAYDIUM_FEE_DEST = RAYDIUM_FEE_DESTINATION;
+
+    private txQueue: Array<{ data: any }> = [];
+    private accountQueue: Array<{ data: any }> = [];
+    private processing = false;
+    private maxQueueSize = config.geyser.maxEventQueueSize ?? 1000;
+
+    private subscribedAccounts: Set<string> = new Set();
+    private pendingSubscribeRequest: NodeJS.Timeout | null = null;
+
+    private channelOptions: Record<string, any>;
+    private combinedCreds: any;
+
+    constructor() {
+        super();
+        logger.debug('gRPC client created', {
+            endpoint: config.geyser.endpoint,
+            token: config.geyser.token ? `${config.geyser.token.slice(0, 8)}...` : 'none',
+        });
+
+        this.channelOptions = {
+            'grpc.keepalive_time_ms': 30000,
+            'grpc.keepalive_timeout_ms': 10000,
+            'grpc.keepalive_permit_without_calls': 1,
+            'grpc.http2.min_time_between_pings_ms': 10000,
+            'grpc.http2.max_pings_without_data': 0,
+            'grpc.max_receive_message_length': 64 * 1024 * 1024,
+            'grpc.max_send_message_length': 64 * 1024 * 1024,
+        };
+
+        const sslCreds = grpc.credentials.createSsl();
+        const callCreds = grpc.credentials.createFromMetadataGenerator((_params, callback) => {
+            const meta = new grpc.Metadata();
+            meta.add('x-token', config.geyser.token);
+            callback(null, meta);
+        });
+        this.combinedCreds = grpc.credentials.combineChannelCredentials(sslCreds, callCreds);
+
+        this.client = new geyserProto.Geyser(config.geyser.endpoint, this.combinedCreds, this.channelOptions);
+    }
+
+    async subscribe() {
+        this.running = true;
+        this.reconnectAttempts = 0;
+        this.connect();
+    }
+
+    private connect() {
+        if (!this.running) return;
+
+        this.destroyStream();
+        this.dataReceived = false;
+
+        this.stream = this.client.subscribe();
+
+        this.stream.on('data', (data: any) => {
+            if (!this.dataReceived) {
+                this.dataReceived = true;
+                if (this.reconnectAttempts > 0) {
+                    logger.info(`gRPC stream restored after ${this.reconnectAttempts} attempts`);
+                }
+                this.reconnectAttempts = 0;
+            }
+            const totalSize = this.txQueue.length + this.accountQueue.length;
+            if (totalSize >= this.maxQueueSize) {
+                if (this.accountQueue.length > 0) {
+                    this.accountQueue.shift();
+                } else {
+                    this.txQueue.shift();
+                }
+                logger.warn(`Event queue full (${this.maxQueueSize}), dropping oldest low-priority event`);
+                if (this.stream) this.stream.pause();
+            }
+            if (data.transaction) {
+                this.txQueue.push({ data });
+            } else {
+                this.accountQueue.push({ data });
+            }
+            this.processQueue();
+        });
+
+        this.stream.on('error', (err: any) => {
+            logger.error(`gRPC stream error: ${err?.message ?? err?.code ?? err}`);
+            if (err.code === 16) {
+                logger.error('gRPC authentication failed. Check GRPC_TOKEN.');
+                process.exit(1);
+                return;
+            }
+            this.reconnect();
+        });
+
+        this.stream.on('end', () => {
+            logger.warn('gRPC stream ended');
+            this.reconnect();
+        });
+
+        this.sendSubscribeRequest();
+    }
+
+    private destroyStream() {
+        if (this.stream) {
+            try {
+                this.stream.removeAllListeners('data');
+                this.stream.removeAllListeners('end');
+                this.stream.removeAllListeners('error');
+                this.stream.on('error', () => {});
+                this.stream.cancel();
+            } catch (err) {
+                logger.debug('Error destroying gRPC stream:', err);
+            }
+            this.stream = null;
+        }
+    }
+
+    private reconnect() {
+        if (!this.running) return;
+
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+
+        this.destroyStream();
+        this.reconnectAttempts++;
+
+        if (this.reconnectAttempts > GeyserClient.MAX_RECONNECT_BEFORE_RESET) {
+            logger.warn(`gRPC: ${this.reconnectAttempts} reconnects, recreating client channel`);
+            this.recreateClient();
+            this.reconnectAttempts = 1;
+        }
+
+        const delay = Math.min(1000 * Math.pow(2, Math.min(this.reconnectAttempts - 1, 5)), 30000);
+        logger.info(`Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})...`);
+
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connect();
+        }, delay);
+    }
+
+    private recreateClient() {
+        try { this.client?.close?.(); } catch {}
+        this.client = new geyserProto.Geyser(config.geyser.endpoint, this.combinedCreds, this.channelOptions);
+    }
+
+    private sendSubscribeRequest() {
+        if (!this.stream) return;
+
+        const accountAddresses = Array.from(this.subscribedAccounts);
+
+        const request: any = {
+            slots: {},
+            transactions: {
+                pump_fun_and_swap_filter: {
+                    vote: false,
+                    failed: false,
+                    account_include: [
+                        this.PUMP_PROGRAM, this.PUMP_SWAP, this.PUMP_ROUTER,
+                        this.RAYDIUM_LAUNCH, this.RAYDIUM_CPMM, this.RAYDIUM_AMM_V4, this.RAYDIUM_FEE_DEST,
+                    ],
+                },
+            },
+            blocks: {},
+            blocks_meta: {},
+            entry: {},
+            commitment: 0,
+            ping: null,
+        };
+
+        // Only subscribe to specific tracked accounts (open positions).
+        // Previous owner_include for 7 programs streamed ALL accounts (~777 GB/month, 77M credits).
+        // Transactions filter already provides CREATE/swap events for all protocols.
+        if (accountAddresses.length > 0) {
+            request.accounts = {
+                position_accounts: {
+                    account_include: accountAddresses,
+                },
+            };
+        }
+
+        logger.debug('gRPC subscribe request', request);
+
+        try {
+            this.stream.write(request);
+        } catch (err) {
+            logger.error('Failed to write to gRPC stream:', err);
+        }
+    }
+
+    public addAccount(account: PublicKey) {
+        const key = account.toBase58();
+        if (this.subscribedAccounts.has(key)) return;
+        this.subscribedAccounts.add(key);
+        this.scheduleSubscribeUpdate();
+    }
+
+    public removeAccount(account: PublicKey) {
+        const key = account.toBase58();
+        if (!this.subscribedAccounts.has(key)) return;
+        this.subscribedAccounts.delete(key);
+        this.scheduleSubscribeUpdate();
+    }
+
+    private scheduleSubscribeUpdate() {
+        if (this.pendingSubscribeRequest) clearTimeout(this.pendingSubscribeRequest);
+        this.pendingSubscribeRequest = setTimeout(() => {
+            if (this.running && this.stream) {
+                this.sendSubscribeRequest();
+            }
+            this.pendingSubscribeRequest = null;
+        }, 1000);
+    }
+
+    private async processQueue() {
+        if (this.processing) return;
+        this.processing = true;
+
+        try {
+            while ((this.txQueue.length > 0 || this.accountQueue.length > 0) && this.running) {
+                // Transactions first (CREATE/buy/sell events are time-critical)
+                const txBatch = Math.min(50, this.txQueue.length);
+                for (let i = 0; i < txBatch; i++) {
+                    const item = this.txQueue.shift();
+                    if (!item) continue;
+                    try {
+                        this.handleTransaction(item.data.transaction);
+                    } catch (err) {
+                        logger.error('Error handling gRPC tx:', err);
+                    }
+                }
+                // Then account updates
+                const accBatch = Math.min(50 - txBatch, this.accountQueue.length);
+                for (let i = 0; i < accBatch; i++) {
+                    const item = this.accountQueue.shift();
+                    if (!item) continue;
+                    try {
+                        if (item.data.account) {
+                            this.handleAccount(item.data.account);
+                        } else if (item.data.error) {
+                            logger.error('gRPC server error:', item.data.error);
+                        }
+                    } catch (err) {
+                        logger.error('Error handling gRPC account:', err);
+                    }
+                }
+                await new Promise(resolve => setImmediate(resolve));
+            }
+        } finally {
+            this.processing = false;
+            const totalSize = this.txQueue.length + this.accountQueue.length;
+            if (this.stream && this.stream.isPaused() && totalSize < this.maxQueueSize * 0.5) {
+                this.stream.resume();
+            }
+        }
+    }
+
+    private handleAccount(accountData: any) {
+        const pubkey = accountData.pubkey;
+        if (!pubkey) return;
+
+        let accountKey: PublicKey;
+        try {
+            accountKey = new PublicKey(pubkey);
+        } catch {
+            logger.warn('handleAccount: invalid pubkey format');
+            return;
+        }
+
+        const rawData = accountData.data;
+        let data: Buffer;
+        try {
+            if (typeof rawData === 'string') {
+                data = Buffer.from(rawData, 'base64');
+            } else if (rawData instanceof Uint8Array) {
+                data = Buffer.from(rawData);
+            } else if (rawData?.data instanceof Uint8Array) {
+                data = Buffer.from(rawData.data);
+            } else if (Array.isArray(rawData)) {
+                data = Buffer.from(rawData);
+            } else {
+                logger.warn(`handleAccount: unexpected data format for ${accountKey.toBase58()}: ${typeof rawData}`);
+                return;
+            }
+        } catch (err) {
+            logger.warn(`handleAccount: failed to parse data for ${accountKey.toBase58()}:`, err);
+            return;
+        }
+
+        if (data.length < 8) {
+            logger.debug(`handleAccount: data too short (${data.length} bytes) for ${accountKey.toBase58()}`);
+            return;
+        }
+
+        this.emit('accountUpdate', {
+            pubkey: accountKey,
+            data,
+            slot: accountData.slot,
+        });
+    }
+
+    private keyToString(key: any): string {
+        if (!key) return '';
+        if (typeof key === 'string') return key;
+        if (key instanceof Uint8Array) {
+            return bs58.encode(key);
+        }
+        if (key.data && key.data instanceof Uint8Array) {
+            return bs58.encode(key.data);
+        }
+        if (key.pubkey) return key.pubkey;
+        return String(key);
+    }
+
+    private handleTransaction(txData: any) {
+        const tx = txData.transaction?.transaction;
+        const meta = txData.transaction?.meta;
+        if (!tx || !tx.message) return;
+
+        const message = tx.message;
+        const signatures = tx.signatures;
+        const signature = signatures?.[0] ? bs58.encode(signatures[0]) : '';
+        const slot = txData.slot;
+
+        // Включаем логирование всех транзакций для диагностики (можно закомментировать после)
+        logger.debug(`Transaction received: ${signature.slice(0, 8)}... slot=${slot}`);
+
+        const staticKeys  = message.accountKeys || [];
+        const writableAlt = meta?.loadedWritableAddresses
+                         ?? meta?.loadedAddresses?.writable
+                         ?? [];
+        const readonlyAlt = meta?.loadedReadonlyAddresses
+                         ?? meta?.loadedAddresses?.readonly
+                         ?? [];
+        const allKeys     = (writableAlt.length > 0 || readonlyAlt.length > 0)
+            ? [...staticKeys, ...writableAlt, ...readonlyAlt]
+            : staticKeys;
+        const fullMessage = allKeys.length > staticKeys.length
+            ? { ...message, accountKeys: allKeys }
+            : message;
+
+        this.parseInstructions(message.instructions, fullMessage, signature, meta, slot);
+
+        if (meta?.innerInstructions) {
+            for (const inner of meta.innerInstructions) {
+                if (inner.instructions) {
+                    this.parseInstructions(inner.instructions, fullMessage, signature, meta, slot);
+                }
+            }
+        }
+    }
+
+    private parseInstructions(instructions: any[], message: any, signature: string, meta?: any, slot?: number) {
+        for (const ix of instructions) {
+            if (ix.programIdIndex === undefined) continue;
+
+            const key = message.accountKeys[ix.programIdIndex];
+            const programId = this.keyToString(key);
+
+            const data =
+                typeof ix.data === 'string'
+                    ? Buffer.from(ix.data, 'base64')
+                    : Buffer.from(ix.data);
+
+            // Проверяем pump.fun основную программу
+            if (programId === this.PUMP_PROGRAM && data.length >= 8) {
+                const discriminator = data.subarray(0, 8);
+                if (discriminator.equals(DISCRIMINATOR.CREATE) || discriminator.equals(DISCRIMINATOR.CREATE_V2)) {
+                    this.handlePumpCreate(ix, message, signature, discriminator.equals(DISCRIMINATOR.CREATE_V2) ? 5 : 7, slot);
+                } else if (discriminator.equals(DISCRIMINATOR.BUY) || discriminator.equals(DISCRIMINATOR.BUY_EXACT_SOL_IN)) {
+                    this.handlePumpBuy(ix, message, signature, slot, discriminator.equals(DISCRIMINATOR.BUY_EXACT_SOL_IN));
+                } else if (discriminator.equals(DISCRIMINATOR.SELL)) {
+                    this.handlePumpSell(ix, message, signature, slot);
+                } else {
+                    // HISTORY_DEV_SNIPER: может это PumpSwap дискриминатор пришедший через CPI в pump.fun
+                    // (e445a52e = PUMP_SWAP_BUY_ALT, c62e1552 = PUMP_SWAP_BUY_EXACT_QUOTE_IN)
+                    if (DISCRIMINATOR.PUMP_SWAP_BUY_ALT && discriminator.equals(DISCRIMINATOR.PUMP_SWAP_BUY_ALT)) {
+                        this.parsePumpSwapSell(ix, message, signature, data, slot);
+                    } else if (DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN && discriminator.equals(DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN)) {
+                        this.parsePumpSwapBuy(ix, message, signature, data, slot);
+                    }
+                }
+            }
+
+            // Проверяем pump.fun роутер
+            if (programId === this.PUMP_ROUTER && data.length >= 8) {
+                const discriminator = data.subarray(0, 8);
+                if (discriminator.equals(DISCRIMINATOR.CREATE) || discriminator.equals(DISCRIMINATOR.CREATE_V2)) {
+                    logger.info(`🔥 CREATE via Router in tx ${signature.slice(0,8)}`);
+                    this.handlePumpCreate(ix, message, signature, 5, slot);
+                } else if (discriminator.equals(DISCRIMINATOR.BUY) || discriminator.equals(DISCRIMINATOR.BUY_EXACT_SOL_IN)) {
+                    this.handlePumpBuy(ix, message, signature, slot, discriminator.equals(DISCRIMINATOR.BUY_EXACT_SOL_IN));
+                } else if (discriminator.equals(DISCRIMINATOR.SELL)) {
+                    this.handlePumpSell(ix, message, signature, slot);
+                } else {
+                    logger.debug(`[diag] Unknown Router discriminator: ${discriminator.toString('hex')} tx=${signature.slice(0,8)}`);
+                }
+            }
+
+            // PumpSwap (без изменений)
+            if (programId === this.PUMP_SWAP) {
+                this.parsePumpSwapInstruction(ix, message, signature, data, slot);
+            }
+
+            // ── Raydium LaunchLab ────────────────────────────────────────────
+            if (programId === this.RAYDIUM_LAUNCH && data.length >= 8) {
+                this.parseRaydiumLaunchInstruction(ix, message, signature, data, slot);
+            }
+
+            // ── Raydium CPMM — детекция новых пулов + swap-ивенты ────────────
+            if (programId === this.RAYDIUM_CPMM && data.length >= 8) {
+                const disc = data.subarray(0, 8);
+                if (disc.equals(RAYDIUM_DISCRIMINATOR.CPMM_CREATE_POOL)) {
+                    this.parseRaydiumCpmmCreatePool(ix, message, signature, slot);
+                } else if (disc.equals(RAYDIUM_DISCRIMINATOR.CPMM_SWAP_BASE_IN)) {
+                    this.parseRaydiumCpmmSwap(ix, message, signature, data, slot);
+                }
+            }
+
+            // ── Raydium AMM v4 — детекция новых пулов + swap-ивенты ──────────
+            // AMM v4 использует instruction index (первый байт), не Anchor disc
+            if (programId === this.RAYDIUM_AMM_V4 && data.length >= 1) {
+                if (data[0] === RAYDIUM_DISCRIMINATOR.AMM_V4_CREATE_POOL_INDEX) {
+                    this.parseRaydiumAmmV4CreatePool(ix, message, signature, slot);
+                } else if (
+                    data[0] === RAYDIUM_DISCRIMINATOR.AMM_V4_SWAP_BASE_IN_INDEX ||
+                    data[0] === RAYDIUM_DISCRIMINATOR.AMM_V4_SWAP_BASE_IN_V2_INDEX
+                ) {
+                    this.parseRaydiumAmmV4Swap(ix, message, signature, data, slot);
+                }
+            }
+        }
+    }
+
+    private handlePumpCreate(ix: any, message: any, signature: string, creatorIndex: number, slot?: number) {
+        try {
+            const mintIndex = ix.accounts?.[0];
+            const bondingCurveIndex = ix.accounts?.[2];
+            const bondingCurveTokenIndex = ix.accounts?.[3];
+            const creatorIndexActual = ix.accounts?.[creatorIndex];
+
+            if (mintIndex === undefined || bondingCurveIndex === undefined ||
+                bondingCurveTokenIndex === undefined || creatorIndexActual === undefined) {
+                logger.warn('CREATE instruction missing expected accounts');
+                return;
+            }
+
+            const mint = this.keyToString(message.accountKeys[mintIndex]);
+            const bondingCurve = this.keyToString(message.accountKeys[bondingCurveIndex]);
+            const bondingCurveTokenAccount = this.keyToString(message.accountKeys[bondingCurveTokenIndex]);
+            const creator = this.keyToString(message.accountKeys[creatorIndexActual]);
+
+            const numRequiredSignatures = message.header?.numRequiredSignatures ?? 0;
+            const isCreatorSigner = creatorIndexActual < numRequiredSignatures;
+
+            logger.debug(`CREATE DIAGNOSTIC: mint=${mint}, creator=${creator}, isSigner=${isCreatorSigner}, index=${creatorIndexActual}, required=${numRequiredSignatures}`);
+
+            if (!isCreatorSigner) {
+                logger.warn(`Skipping CREATE for ${mint}: creator ${creator} is not a signer (tx: ${signature.slice(0,8)})`);
+                return;
+            }
+
+            if (mint && bondingCurve && bondingCurveTokenAccount && creator) {
+                logger.info(`🔥 NEW PUMP TOKEN: ${mint}, creator: ${creator}, slot=${slot}, tx=${signature.slice(0,8)}`);
+                this.emit('newToken', {
+                    mint,
+                    bondingCurve,
+                    bondingCurveTokenAccount,
+                    creator,
+                    signature,
+                    receivedAt: Date.now(),
+                    slot,  // для детекции bundled buys (same-slot create+buy)
+                });
+            }
+        } catch (err) {
+            logger.error('Error handling Pump CREATE:', err);
+        }
+    }
+
+    private handlePumpBuy(ix: any, message: any, signature: string, slot?: number, isBuyExactSolIn: boolean = false) {
+        try {
+            const data =
+                typeof ix.data === 'string'
+                    ? Buffer.from(ix.data, 'base64')
+                    : Buffer.from(ix.data);
+
+            const amount = sanitizeAmount(data.readBigUInt64LE(8));
+            const mintIndex = ix.accounts?.[2];
+            if (mintIndex === undefined) return;
+            const mint = this.keyToString(message.accountKeys[mintIndex]);
+            if (mint) {
+                const amountLabel = isBuyExactSolIn ? 'sol_lamports' : 'tokens';
+                logger.info(`💰 BUY DETECTED: ${mint}, ${amountLabel}: ${amount}, slot=${slot}, tx=${signature.slice(0,8)}${isBuyExactSolIn ? ' (exact_sol_in)' : ''}`);
+                const programIdsInTx = new Set<string>();
+                for (const key of message.accountKeys) {
+                    const progId = this.keyToString(key);
+                    if (progId) programIdsInTx.add(progId);
+                }
+                this.emit('buyDetected', {
+                    mint,
+                    creator: this.keyToString(message.accountKeys[0]),
+                    amount,
+                    solLamports: isBuyExactSolIn ? amount : 0n,
+                    programIds: Array.from(programIdsInTx),
+                    signature,
+                    slot,  // для детекции bundled buys
+                });
+            }
+        } catch (err) {
+            logger.error('Error handling Pump BUY:', err);
+        }
+    }
+
+    private handlePumpSell(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            const data =
+                typeof ix.data === 'string'
+                    ? Buffer.from(ix.data, 'base64')
+                    : Buffer.from(ix.data);
+
+            const amount = sanitizeAmount(data.readBigUInt64LE(8));
+            // pump.fun sell args: amount (u64 @ 8), min_sol_output (u64 @ 16)
+            const solLamports = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n);
+            const mintIndex = ix.accounts?.[2];
+            const sellerIndex = ix.accounts?.[6];
+            if (mintIndex === undefined || sellerIndex === undefined) return;
+
+            const mint = this.keyToString(message.accountKeys[mintIndex]);
+            const seller = this.keyToString(message.accountKeys[sellerIndex]);
+            if (mint && seller) {
+                logger.debug(`📤 PUMP SELL: ${mint}, seller=${seller.slice(0,8)}, amount=${amount}, sol=${Number(solLamports)/1e9}, slot=${slot}, tx=${signature.slice(0,8)}`);
+                this.emit('pumpFunSellDetected', { mint, seller, amount, solLamports, signature });
+            }
+        } catch (err) {
+            logger.error('Error handling Pump SELL:', err);
+        }
+    }
+
+    private parsePumpSwapInstruction(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        if (data.length < 8) return;
+        const d = data.subarray(0, 8);
+
+        // Discriminators verified against pump_amm IDL.
+        // IMPORTANT: baseMint=wSOL, quoteMint=meme_token in PumpSwap pools.
+        //   PUMP_SWAP_BUY  (66063d12 = global:buy)  = user BUYs wSOL by paying TOKEN  → from bot's view: SELL
+        //   PUMP_SWAP_SELL (33e685a4 = global:sell)  = user SELLs wSOL to receive TOKEN → from bot's view: BUY
+        if (d.equals(DISCRIMINATOR.PUMP_SWAP_CREATE_POOL)) {
+            this.parseCreatePool(ix, message, signature, data, slot);
+        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_BUY) || d.equals(DISCRIMINATOR.PUMP_SWAP_BUY_ALT)) {
+            // IDL buy / buy_alt = user pays TOKEN, gets wSOL → someone SELLING their token
+            this.parsePumpSwapSell(ix, message, signature, data, slot);
+        } else if (d.equals(DISCRIMINATOR.PUMP_SWAP_SELL) || d.equals(DISCRIMINATOR.PUMP_SWAP_BUY_EXACT_QUOTE_IN)) {
+            // IDL sell = user pays wSOL, gets TOKEN → someone BUYING the token
+            // buy_exact_quote_in = user specifies SOL input, gets TOKEN → also a BUY
+            this.parsePumpSwapBuy(ix, message, signature, data, slot);
+        }
+    }
+
+    private parseCreatePool(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        // create_pool instruction accounts (IDL):
+        //   [0] pool (writable PDA)  ← реальный адрес пула, читаем его напрямую
+        //   [1] global_config
+        //   [2] creator (signer)
+        //   [3] base_mint
+        //   [4] quote_mint
+        //   ...
+        // Для canonical pump.fun pools: base=wSOL, quote=meme token
+        // Для нестандартных пулов порядок может быть другим — ищем wSOL и определяем meme token.
+
+        const poolIndex     = ix.accounts?.[0];
+        const creatorIndex  = ix.accounts?.[2];
+        const baseMintIndex = ix.accounts?.[3];
+        const quoteMintIndex = ix.accounts?.[4];
+
+        if (baseMintIndex === undefined || quoteMintIndex === undefined) return;
+
+        const pool      = poolIndex !== undefined ? this.keyToString(message.accountKeys[poolIndex]) : '';
+        const baseMint  = this.keyToString(message.accountKeys[baseMintIndex]);
+        const quoteMint = this.keyToString(message.accountKeys[quoteMintIndex]);
+        const creator   = creatorIndex !== undefined
+            ? this.keyToString(message.accountKeys[creatorIndex])
+            : '';
+
+        // Определяем meme token: один из base/quote является wSOL, другой — токен
+        let mintToken: string;
+        if (baseMint === config.wsolMint) {
+            mintToken = quoteMint;
+        } else if (quoteMint === config.wsolMint) {
+            mintToken = baseMint;
+        } else {
+            logger.debug(`[pumpswap] create_pool без wSOL, пропускаем: base=${baseMint?.slice(0,8)} quote=${quoteMint?.slice(0,8)}`);
+            return;
+        }
+        if (!mintToken || mintToken === config.wsolMint) return;
+
+        logger.info(`🆕 NEW PUMP SWAP POOL: mint=${mintToken.slice(0,8)}, pool=${pool.slice(0,8)}, creator=${creator.slice(0,8)}, slot=${slot}`);
+        this.emit('newPumpSwapToken', {
+            mint:      mintToken,
+            pool,       // ← реальный адрес пула из accounts[0]
+            creator,
+            quoteMint: config.wsolMint,
+            signature,
+        });
+    }
+
+    private parsePumpSwapBuy(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        // Called when disc = PUMP_SWAP_SELL (33e685a4 = IDL sell) = user BUYING tokens with SOL
+        // Accounts: [2]=pool, [3]=wSOL (baseMint), [4]=token (quoteMint)
+        // Args: base_amount_in (wSOL lamports), min_quote_amount_out (min tokens)
+        const poolIndex = ix.accounts?.[2];
+        const mintIndex = ix.accounts?.[4];  // quoteMint = meme token (was [3], incorrect)
+        if (mintIndex === undefined) return;
+        const mint = this.keyToString(message.accountKeys[mintIndex]);
+        if (!mint || mint === 'So11111111111111111111111111111111111111112') return;
+
+        const pool = poolIndex !== undefined ? this.keyToString(message.accountKeys[poolIndex]) : '';
+        const solLamports  = sanitizeAmount(data.length >= 16 ? data.readBigUInt64LE(8)  : 0n); // base_amount_in
+        const tokenAmount  = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n); // min_quote_amount_out
+
+        logger.info(`🔄 PUMP SWAP BUY: ${mint}, sol=${Number(solLamports)/1e9}SOL, minTokens=${tokenAmount}, slot=${slot}`);
+        this.emit('pumpSwapBuyDetected', {
+            mint,
+            pool,
+            creator:     this.keyToString(message.accountKeys[0]),
+            amount:      tokenAmount,
+            solLamports,
+            signature,
+        });
+    }
+
+    private parsePumpSwapSell(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        // Called when disc = PUMP_SWAP_BUY (66063d12 = IDL buy) = user SELLING tokens for SOL
+        // Accounts: [3]=wSOL (baseMint), [4]=token (quoteMint)
+        // Args: base_amount_out (wSOL lamports to receive), max_quote_amount_in (max tokens to pay)
+        const mintIndex = ix.accounts?.[4];  // quoteMint = meme token
+        if (mintIndex === undefined) return;
+        const mint = this.keyToString(message.accountKeys[mintIndex]);
+        if (!mint || mint === 'So11111111111111111111111111111111111111112') return;
+
+        const solLamports = sanitizeAmount(data.length >= 16 ? data.readBigUInt64LE(8)  : 0n); // base_amount_out (SOL received)
+        const tokenAmount = sanitizeAmount(data.length >= 24 ? data.readBigUInt64LE(16) : 0n); // max_quote_amount_in (tokens sold)
+
+        logger.debug(`🔄 PUMP SWAP SELL: ${mint}, seller=${this.keyToString(message.accountKeys[0]).slice(0,8)}, tokens=${tokenAmount}, sol=${Number(solLamports)/1e9}SOL, slot=${slot}`);
+        this.emit('pumpSwapSellDetected', {
+            mint,
+            creator:  this.keyToString(message.accountKeys[0]),
+            amount:   tokenAmount,
+            solLamports,
+            signature,
+        });
+    }
+
+    // ═══ Raydium LaunchLab parsing ══════════════════════════════════════════════
+
+    private parseRaydiumLaunchInstruction(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        const disc = data.subarray(0, 8);
+
+        if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_INITIALIZE_V2)) {
+            this.parseRaydiumLaunchCreate(ix, message, signature, slot);
+        } else if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_BUY_EXACT_IN) ||
+                   disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_BUY_EXACT_OUT)) {
+            this.parseRaydiumLaunchBuy(ix, message, signature, data, slot);
+        } else if (disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_SELL_EXACT_IN) ||
+                   disc.equals(RAYDIUM_DISCRIMINATOR.LAUNCH_SELL_EXACT_OUT)) {
+            this.parseRaydiumLaunchSell(ix, message, signature, data, slot);
+        }
+    }
+
+    private parseRaydiumLaunchCreate(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // InitializeV2 accounts:
+            //   [0] payer (signer), [1] creator, [4] auth, [5] poolId, [6] mintA (signer)
+            const creatorIndex = ix.accounts?.[1];
+            const poolIndex    = ix.accounts?.[5];
+            const mintIndex    = ix.accounts?.[6];
+
+            if (mintIndex === undefined || poolIndex === undefined) return;
+
+            const mint    = this.keyToString(message.accountKeys[mintIndex]);
+            const pool    = this.keyToString(message.accountKeys[poolIndex]);
+            const creator = creatorIndex !== undefined ? this.keyToString(message.accountKeys[creatorIndex]) : '';
+
+            if (!mint || !pool) return;
+
+            logger.info(`🚀 RAYDIUM LAUNCHLAB CREATE: mint=${mint.slice(0,8)}, pool=${pool.slice(0,8)}, creator=${creator.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumLaunchCreate', {
+                mint,
+                pool,
+                creator,
+                signature,
+                receivedAt: Date.now(),
+            } as RaydiumLaunchCreate);
+        } catch (err) {
+            logger.error('Error handling Raydium LaunchLab CREATE:', err);
+        }
+    }
+
+    private parseRaydiumLaunchBuy(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        try {
+            // BuyExactIn: [0] owner, [4] poolId, [9] mintA
+            // Args @ offset 8: amountB (u64) = SOL
+            const buyerIndex = ix.accounts?.[0];
+            const poolIndex  = ix.accounts?.[4];
+            const mintIndex  = ix.accounts?.[9];
+
+            if (mintIndex === undefined || poolIndex === undefined) return;
+
+            const mint   = this.keyToString(message.accountKeys[mintIndex]);
+            const pool   = this.keyToString(message.accountKeys[poolIndex]);
+            const buyer  = buyerIndex !== undefined ? this.keyToString(message.accountKeys[buyerIndex]) : '';
+            const amountSol = data.length >= 16 ? data.readBigUInt64LE(8) : 0n;
+
+            if (!mint) return;
+
+            logger.info(`💰 RAYDIUM LAUNCH BUY: ${mint.slice(0,8)}, sol=${Number(amountSol)/1e9}, buyer=${buyer.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumLaunchBuyDetected', {
+                mint,
+                pool,
+                buyer,
+                amountSol,
+                signature,
+            } as RaydiumLaunchBuy);
+        } catch (err) {
+            logger.error(`Error handling Raydium LaunchLab BUY: ${err instanceof Error ? err.message : String(err)}`);
+        }
+    }
+
+    private parseRaydiumLaunchSell(ix: any, message: any, signature: string, data: Buffer, slot?: number) {
+        try {
+            // SellExactIn: [0] owner, [4] poolId, [9] mintA
+            // Args @ offset 8: amountA (u64) = tokens
+            const sellerIndex = ix.accounts?.[0];
+            const poolIndex   = ix.accounts?.[4];
+            const mintIndex   = ix.accounts?.[9];
+
+            if (mintIndex === undefined) return;
+
+            const mint   = this.keyToString(message.accountKeys[mintIndex]);
+            const pool   = poolIndex !== undefined ? this.keyToString(message.accountKeys[poolIndex]) : '';
+            const seller = sellerIndex !== undefined ? this.keyToString(message.accountKeys[sellerIndex]) : '';
+            const amountTokens = data.length >= 16 ? data.readBigUInt64LE(8) : 0n;
+
+            if (!mint) return;
+
+            logger.debug(`📤 RAYDIUM LAUNCH SELL: ${mint.slice(0,8)}, seller=${seller.slice(0,8)}, tokens=${amountTokens}, slot=${slot}`);
+            this.emit('raydiumLaunchSellDetected', {
+                mint,
+                pool,
+                seller,
+                amountTokens,
+                signature,
+            } as RaydiumLaunchSell);
+        } catch (err) {
+            logger.error('Error handling Raydium LaunchLab SELL:', err);
+        }
+    }
+
+    // ═══ Raydium CPMM new pool detection ═════════════════════════════════════════
+
+    private parseRaydiumCpmmCreatePool(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // CreatePool accounts (20): [0] creator, [4] pool, [5] mintA, [6] mintB
+            const poolIndex  = ix.accounts?.[4];
+            const mintAIndex = ix.accounts?.[5];
+            const mintBIndex = ix.accounts?.[6];
+            const creatorIndex = ix.accounts?.[0];
+
+            if (poolIndex === undefined || mintAIndex === undefined || mintBIndex === undefined) return;
+
+            const pool    = this.keyToString(message.accountKeys[poolIndex]);
+            const mintA   = this.keyToString(message.accountKeys[mintAIndex]);
+            const mintB   = this.keyToString(message.accountKeys[mintBIndex]);
+            const creator = creatorIndex !== undefined ? this.keyToString(message.accountKeys[creatorIndex]) : '';
+
+            // Определяем meme token — один из пары является wSOL
+            let mint: string;
+            if (mintA === config.wsolMint) {
+                mint = mintB;
+            } else if (mintB === config.wsolMint) {
+                mint = mintA;
+            } else {
+                logger.debug(`[raydium-cpmm] create_pool без wSOL: mintA=${mintA?.slice(0,8)} mintB=${mintB?.slice(0,8)}`);
+                return;
+            }
+            if (!mint) return;
+
+            logger.info(`🆕 RAYDIUM CPMM POOL: mint=${mint.slice(0,8)}, pool=${pool.slice(0,8)}, creator=${creator.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumCpmmNewPool', {
+                mint,
+                pool,
+                creator,
+                signature,
+            } as RaydiumCpmmNewPool);
+        } catch (err) {
+            logger.error('Error handling Raydium CPMM create_pool:', err);
+        }
+    }
+
+    // ═══ Raydium AMM v4 new pool detection ═══════════════════════════════════════
+
+    private parseRaydiumAmmV4CreatePool(ix: any, message: any, signature: string, slot?: number) {
+        try {
+            // AMM v4 create pool: instruction data[0] == 1
+            // Account indices from raydium-sdk-V2-demo/src/grpc/subNewAmmPool.ts:
+            //   [4] poolId, [8] baseMint, [9] quoteMint
+            const poolIndex      = ix.accounts?.[4];
+            const baseMintIndex  = ix.accounts?.[8];
+            const quoteMintIndex = ix.accounts?.[9];
+
+            if (poolIndex === undefined || baseMintIndex === undefined || quoteMintIndex === undefined) return;
+
+            const pool      = this.keyToString(message.accountKeys[poolIndex]);
+            const baseMint  = this.keyToString(message.accountKeys[baseMintIndex]);
+            const quoteMint = this.keyToString(message.accountKeys[quoteMintIndex]);
+
+            if (!pool || !baseMint || !quoteMint) return;
+
+            logger.info(`🆕 RAYDIUM AMM V4 POOL: base=${baseMint.slice(0,8)}, quote=${quoteMint.slice(0,8)}, pool=${pool.slice(0,8)}, slot=${slot}`);
+            this.emit('raydiumAmmV4NewPool', {
+                pool,
+                baseMint,
+                quoteMint,
+                signature,
+            } as RaydiumAmmV4NewPool);
+        } catch (err) {
+            logger.error('Error handling Raydium AMM v4 create_pool:', err);
+        }
+    }
+
+    // ═══ Raydium CPMM swap detection ═════════════════════════════════════════════
+    //
+    // CPMM SwapBaseIn accounts (13):
+    //   [0] user (payer), [3] pool, [10] inputMint, [11] outputMint
+    // Args: amountIn (u64) @ offset 8, amountOutMin (u64) @ offset 16
+
+    private parseRaydiumCpmmSwap(ix: any, message: any, signature: string, data: Buffer, _slot?: number) {
+        try {
+            const userIndex   = ix.accounts?.[0];
+            const poolIndex   = ix.accounts?.[3];
+            const inMintIdx   = ix.accounts?.[10];
+            const outMintIdx  = ix.accounts?.[11];
+
+            if (poolIndex === undefined || inMintIdx === undefined || outMintIdx === undefined) return;
+
+            const pool       = this.keyToString(message.accountKeys[poolIndex]);
+            const inputMint  = this.keyToString(message.accountKeys[inMintIdx]);
+            const outputMint = this.keyToString(message.accountKeys[outMintIdx]);
+            const user       = userIndex !== undefined ? this.keyToString(message.accountKeys[userIndex]) : '';
+
+            if (!pool || !inputMint || !outputMint) return;
+
+            // Интересуемся только wSOL-парными пулами (buy = wSOL→token, sell = token→wSOL)
+            if (inputMint !== config.wsolMint && outputMint !== config.wsolMint) return;
+
+            const amountIn = data.length >= 16 ? data.readBigUInt64LE(8) : 0n;
+
+            this.emit('raydiumCpmmSwapDetected', {
+                pool,
+                inputMint,
+                outputMint,
+                user,
+                amountIn,
+                signature,
+            } as RaydiumCpmmSwap);
+        } catch (err) {
+            logger.debug(`[raydium-cpmm-swap] parse failed: ${err}`);
+        }
+    }
+
+    // ═══ Raydium AMM v4 swap detection ═══════════════════════════════════════════
+    //
+    // AMM v4 SwapBaseIn V2 accounts (8): [1] pool, [7] user
+    // Legacy (index 9) has OpenBook accounts вклинены — тот же [1] pool, но user смещён.
+    // Мы эмитим только poolId — mint резолвится в Sniper через poolToMint кэш.
+    // Args: amountIn (u64) @ offset 1, minOut (u64) @ offset 9
+
+    private parseRaydiumAmmV4Swap(ix: any, message: any, signature: string, data: Buffer, _slot?: number) {
+        try {
+            const poolIndex = ix.accounts?.[1];
+            if (poolIndex === undefined) return;
+
+            const pool = this.keyToString(message.accountKeys[poolIndex]);
+            if (!pool) return;
+
+            // AMM v4 SwapBaseIn V2 accounts:
+            //   [0] TokenProgram, [1] pool, [2] authority, [3] baseVault, [4] quoteVault,
+            //   [5] userInputAta,  [6] userOutputAta, [7] user (signer)
+            // Legacy layout has OpenBook accounts inserted (index 9) — shifts user to [17].
+            const isV2 = data[0] === RAYDIUM_DISCRIMINATOR.AMM_V4_SWAP_BASE_IN_V2_INDEX;
+            const userIdx      = ix.accounts?.[isV2 ? 7 : 17];
+            const userInputIdx = ix.accounts?.[isV2 ? 5 : 15];
+            const user         = userIdx !== undefined ? this.keyToString(message.accountKeys[userIdx]) : '';
+            const userInputAta = userInputIdx !== undefined ? this.keyToString(message.accountKeys[userInputIdx]) : '';
+
+            const amountIn = data.length >= 9 ? data.readBigUInt64LE(1) : 0n;
+
+            this.emit('raydiumAmmV4SwapDetected', {
+                pool,
+                user,
+                userInputAta,
+                amountIn,
+                signature,
+            } as RaydiumAmmV4Swap);
+        } catch (err) {
+            logger.debug(`[raydium-ammv4-swap] parse failed: ${err}`);
+        }
+    }
+
+    stop() {
+        this.running = false;
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        this.destroyStream();
+        if (this.pendingSubscribeRequest) {
+            clearTimeout(this.pendingSubscribeRequest);
+            this.pendingSubscribeRequest = null;
+        }
+        this.reconnectAttempts = 0;
+        logger.debug('gRPC client stopped');
+    }
+}
