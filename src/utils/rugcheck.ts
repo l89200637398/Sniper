@@ -119,10 +119,20 @@ export async function checkRugcheck(mint: string): Promise<RugcheckResult> {
         }
       }
 
-      // Authority checks
+      // Authority checks — pump.fun/LaunchLab programmatic mint authority is expected, not dangerous
+      const SAFE_AUTHORITIES = new Set([
+        '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',  // pump.fun
+        'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj',  // Raydium LaunchLab
+      ]);
       const hasMintAuthority = !!data.mintAuthority;
       const hasFreezeAuthority = !!data.freezeAuthority;
-      if (hasMintAuthority) { risks.push('mint_authority'); riskScore -= 20; }
+      if (hasMintAuthority) {
+        if (SAFE_AUTHORITIES.has(data.mintAuthority)) {
+          risks.push('mint_authority_program');
+        } else {
+          risks.push('mint_authority'); riskScore -= 20;
+        }
+      }
       if (hasFreezeAuthority) { risks.push('freeze_authority'); riskScore -= 15; }
 
       // Honeypot

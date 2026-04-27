@@ -169,7 +169,7 @@ function toSignal(t: ApiTweet): SocialSignal | null {
   return {
     source:    'twitter',
     mint:      mints[0],
-    ticker:    mints.length === 0 ? tickers[0] : undefined,
+    ticker:    tickers[0],
     sentiment: scoreSentiment(text),
     rawText:   text.slice(0, 500),
     author:    username,

@@ -1,10 +1,11 @@
 import {
-  Connection, Keypair, PublicKey,
+  Connection, Keypair, PublicKey, SystemProgram,
   VersionedTransaction, TransactionMessage,
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   createAssociatedTokenAccountIdempotentInstruction,
+  createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -335,6 +336,13 @@ async function buildCpmmBuyTx(
   diagnostics.solReserve = solReserve.toString();
   diagnostics.expectedOut = expectedOut.toString();
 
+  const createInputAta = createAssociatedTokenAccountIdempotentInstruction(
+    payer.publicKey, userInputAta, payer.publicKey, inputMint, inputTokenProgram,
+  );
+  const wrapSol = SystemProgram.transfer({
+    fromPubkey: payer.publicKey, toPubkey: userInputAta, lamports: solLamports,
+  });
+  const syncNative = createSyncNativeInstruction(userInputAta);
   const createOutputAta = createAssociatedTokenAccountIdempotentInstruction(
     payer.publicKey, userOutputAta, payer.publicKey, outputMint, outputTokenProgram,
   );
@@ -345,7 +353,7 @@ async function buildCpmmBuyTx(
     solLamports, minOut,
   );
 
-  const tx = await wrapTx(payer, [createOutputAta, swapIx]);
+  const tx = await wrapTx(payer, [createInputAta, wrapSol, syncNative, createOutputAta, swapIx]);
   return { success: true, diagnostics, tx };
 }
 
@@ -404,6 +412,13 @@ async function buildAmmV4BuyTx(
   diagnostics.solReserve = solReserve.toString();
   diagnostics.expectedOut = expectedOut.toString();
 
+  const createInputAta = createAssociatedTokenAccountIdempotentInstruction(
+    payer.publicKey, userInputAta, payer.publicKey, WSOL_MINT,
+  );
+  const wrapSol = SystemProgram.transfer({
+    fromPubkey: payer.publicKey, toPubkey: userInputAta, lamports: solLamports,
+  });
+  const syncNative = createSyncNativeInstruction(userInputAta);
   const createOutputAta = createAssociatedTokenAccountIdempotentInstruction(
     payer.publicKey, userOutputAta, payer.publicKey, mint,
   );
@@ -412,7 +427,7 @@ async function buildAmmV4BuyTx(
     solLamports, minOut,
   );
 
-  const tx = await wrapTx(payer, [createOutputAta, swapIx]);
+  const tx = await wrapTx(payer, [createInputAta, wrapSol, syncNative, createOutputAta, swapIx]);
   return { success: true, diagnostics, tx };
 }
 

@@ -239,8 +239,15 @@ export const config = {
     // выходим раньше, не ждём stagnation. Спасает от «мёртвых» позиций.
     deadVolume: {
       enabled:     true,
-      timeoutMs:   30_000,   // 45→30с: shadow AMM v4 21/24=dead_volume, выходим быстрее
-      minAgeMs:    10_000,   // 12→10с: раньше проверяем dead volume
+      timeoutMs:   30_000,
+      minAgeMs:    10_000,
+      protocolTimeouts: {
+        'pump.fun':        25_000,
+        'pumpswap':        60_000,
+        'raydium-cpmm':    90_000,
+        'raydium-ammv4':  120_000,
+        'raydium-launch':  60_000,
+      } as Record<string, number>,
     },
 
     // ── Whale Sell Detection ─────────────────────────────────────────────────
@@ -350,7 +357,7 @@ export const config = {
       minLiquiditySol:   0.04,
       slippageBps:       2000,               // E: 2500→2000: tighter slippage, rejects illiquid pools
       exit: {
-        entryStopLossPercent:          10,   // 8→10: слишком tight SL убивает позиции, которые дипают перед пампом
+        entryStopLossPercent:          8,    // 10→8: bonding curve быстрый, tight SL экономит на dead tokens
         velocityDropPercent:           18,   // 15→18: шире порог, bonding curve volatile
         velocityWindowMs:              1500, // 500→1500: 3-4 блока вместо 1, фильтрует шум одного тика
         trailingActivationPercent:     20,   // 25→20: активируем trailing раньше, ловим больше profit
@@ -373,7 +380,7 @@ export const config = {
         runnerHardStopPercent:         35,    // 40→35: tighter hard stop в runner
         // EV-MODEL v3: earlier TP1 for cost recovery. 0.65 total, 35% runner reserve.
         takeProfit: [
-          { levelPercent:   15, portion: 0.30 },  // TP1: 25→15%, portion 0.25→0.30 — быстрее recover costs
+          { levelPercent:   12, portion: 0.30 },  // TP1: 15→12%, быстрее recover costs на bonding curve
           { levelPercent:   60, portion: 0.20 },  // TP2: 80→60, solid pump
           { levelPercent:  200, portion: 0.10 },  // TP3: 250→200
           { levelPercent:  500, portion: 0.05 },  // TP4: 600→500, маленькая порция — основное = runner
@@ -389,9 +396,9 @@ export const config = {
       slippageBps:           1500,   // E: 1800→1500: tighter PumpSwap slippage
       maxReserveFraction:    0.20,
       exit: {
-        entryStopLossPercent:          15,   // 12→15: шире SL — shadow показал hard_stop exits с +90% peak, дип перед пампом
-        trailingActivationPercent:     25,   // 30→25: раньше lock-in прибыль
-        trailingDrawdownPercent:       12,   // 10→12: шире trailing, не срубаем runners на коррекциях
+        entryStopLossPercent:          15,   // шире SL — shadow показал hard_stop exits с +90% peak, дип перед пампом
+        trailingActivationPercent:     40,   // 25→40: AMM volatility, не активируем trailing слишком рано
+        trailingDrawdownPercent:       18,   // 12→18: широкий trailing для AMM, даём runners дышать
         slowDrawdownPercent:           35,   // E: 38→35
         slowDrawdownMinDurationMs:     1200,
         velocityDropPercent:           20,   // 14→20: менее чувствителен к дампу, AMM пулы volatile
@@ -403,16 +410,16 @@ export const config = {
         timeStopMinPnl:               -0.06, // -0.08→-0.06: быстрее cut стагнирующие
         breakEvenAfterTrailingPercent: -1.5, // было -3
         // Runner tail для PumpSwap (миграции с bonding curve, потенциал большой).
-        runnerActivationPercent:       120,  // 200→120: раньше входим в runner mode, ловим 2x+ токены
+        runnerActivationPercent:       80,   // 120→80: AMM runner mode быстрее, ловим 2x+ движения
         runnerTrailDrawdownPercent:    30,   // 25→30: шире trailing в runner mode, даём space для volatility
         runnerHardStopPercent:         45,   // 50→45: защита от полного reversal
         // EV-MODEL v3: PumpSwap best protocol, optimize for runners.
         // Portions sum 0.55 → 45% runner reserve (was 40%).
         takeProfit: [
-          { levelPercent:   15, portion: 0.25 },  // TP1: 20→15%, ранний cost recovery
-          { levelPercent:   50, portion: 0.15 },  // TP2: 60→50, фиксация
-          { levelPercent:  120, portion: 0.10 },  // TP3: 150→120
-          { levelPercent:  350, portion: 0.05 },  // TP4: 400→350, маленькая порция — основное = runner reserve 45%
+          { levelPercent:   25, portion: 0.25 },  // TP1: 15→25%, AMM позволяет больший upside
+          { levelPercent:   80, portion: 0.15 },  // TP2: 50→80, фиксация позже
+          { levelPercent:  180, portion: 0.10 },  // TP3: 120→180, AMM runners идут далеко
+          { levelPercent:  400, portion: 0.05 },  // TP4: 350→400, runner reserve 45%
         ],
       },
     },
@@ -616,10 +623,11 @@ export const config = {
     minBuySellRatio: 2.0,           // 1.5→2.0: требуем более выраженный buy-перевес
 
     // Protocol-specific volume thresholds (override minBuyVolumeSol per protocol)
-    pumpFunMinVolumeSol:       0.5,  // 1.5→0.5: bonding curve tokens имеют меньший объём
+    pumpFunMinVolumeSol:       1.0,  // 0.5→1.0: quant рекомендует выше, 0.5 пропускает шум
     pumpSwapMinVolumeSol:      3.0,  // PumpSwap: AMM pool, need stronger volume signal
     raydiumLaunchMinVolumeSol: 2.0,  // LaunchLab: bonding curve similar to pump.fun
-    raydiumAmmMinVolumeSol:    5.0,  // CPMM/AMM v4: deep liquidity, need high volume for signal
+    raydiumCpmmMinVolumeSol:   4.0,  // CPMM: deeper liquidity than LaunchLab, moderate threshold
+    raydiumAmmMinVolumeSol:    5.0,  // AMM v4: deepest liquidity, highest threshold
 
     // buyAcceleration gate: require accelerating buy rate for trend confirmation
     buyAccelerationGate: true,

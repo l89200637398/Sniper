@@ -305,7 +305,7 @@ export function createTelegramFetcher(): (() => Promise<SocialSignal[]>) | null 
         out.push({
           source: 'telegram',
           mint:   mints[0],
-          ticker: mints.length === 0 ? tickers[0] : undefined,
+          ticker: tickers[0],
           sentiment: scoreSentiment(p.text),
           rawText: p.text.slice(0, 500),
           author: `@${channel}`,

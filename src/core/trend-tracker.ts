@@ -193,7 +193,10 @@ export class TrendTracker extends EventEmitter {
     if (protocol === 'pumpswap') {
       return { minVolume: cfg.pumpSwapMinVolumeSol ?? cfg.minBuyVolumeSol, minBuyers: cfg.minUniqueBuyers + 1 };
     }
-    if (protocol === 'raydium-cpmm' || protocol === 'raydium-ammv4') {
+    if (protocol === 'raydium-cpmm') {
+      return { minVolume: (cfg as any).raydiumCpmmMinVolumeSol ?? cfg.raydiumAmmMinVolumeSol ?? cfg.minBuyVolumeSol, minBuyers: cfg.minUniqueBuyers + 2 };
+    }
+    if (protocol === 'raydium-ammv4') {
       return { minVolume: cfg.raydiumAmmMinVolumeSol ?? cfg.minBuyVolumeSol, minBuyers: cfg.minUniqueBuyers + 2 };
     }
     if (protocol === 'raydium-launch') {

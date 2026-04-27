@@ -34,10 +34,18 @@ export async function isTokenSafe(connection: Connection, mint: PublicKey): Prom
       return { safe: false, reason: `Unknown token program: ${programId}` };
     }
 
+    const PUMPFUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+    const RAYDIUM_LAUNCHLAB = 'LanMV9sAd7wArD4vJFi2qDdfnVhFxYSUg6eADduJ3uj';
+
     const mintInfo = await connection.getParsedAccountInfo(mint);
     const parsed = (mintInfo.value?.data as any)?.parsed?.info;
     if (parsed) {
-      if (parsed.mintAuthority) return { safe: false, reason: 'Mint authority present' };
+      if (parsed.mintAuthority) {
+        const auth = parsed.mintAuthority as string;
+        if (auth !== PUMPFUN_PROGRAM && auth !== RAYDIUM_LAUNCHLAB) {
+          return { safe: false, reason: `Mint authority present: ${auth.slice(0, 8)}` };
+        }
+      }
       if (parsed.freezeAuthority) return { safe: false, reason: 'Freeze authority present' };
     }
     return { safe: true };

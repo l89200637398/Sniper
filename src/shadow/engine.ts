@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { getAssociatedTokenAddressSync } from '@solana/spl-token';
 import { GeyserClient } from '../geyser/client';
 import { TrendTracker, TrendMetrics } from '../core/trend-tracker';
 import { WalletTracker } from '../core/wallet-tracker';
@@ -26,7 +27,7 @@ import type { ShadowProfile } from './profiles';
 
 const BUY_FEE_SOL = 0.001;
 const SELL_FEE_SOL = 0.001;
-const SLIPPAGE_BPS = 200;
+const SLIPPAGE_BPS = 500;
 const POLL_INTERVAL_MS = 3000;
 const MAX_DETECTED_TOKENS = 2000;
 const MAX_TRADE_LOG = 2000;
@@ -600,10 +601,25 @@ export class ShadowEngine extends EventEmitter {
       const user = event.user as string;
       const solAmount = Number(event.amountIn ?? 0) / 1e9;
 
-      this.refreshBuyActivity(mapped.mint);
+      let isBuy = true;
+      if (event.userInputAta && user) {
+        try {
+          const userPk = new PublicKey(user);
+          const wsolPk = new PublicKey(WSOL_MINT);
+          const expectedWsolAta = getAssociatedTokenAddressSync(wsolPk, userPk, false).toBase58();
+          if (event.userInputAta !== expectedWsolAta) isBuy = false;
+        } catch { /* conservative: treat as buy */ }
+      }
 
-      if (this.trendTracker.isTracking(mapped.mint)) {
-        this.trendTracker.recordBuy(mapped.mint, user, solAmount);
+      if (isBuy) {
+        this.refreshBuyActivity(mapped.mint);
+        if (this.trendTracker.isTracking(mapped.mint)) {
+          this.trendTracker.recordBuy(mapped.mint, user, solAmount);
+        }
+      } else {
+        if (this.trendTracker.isTracking(mapped.mint)) {
+          this.trendTracker.recordSell(mapped.mint, user, 0);
+        }
       }
       return;
     }
@@ -1641,9 +1657,14 @@ export class ShadowEngine extends EventEmitter {
     const totalFees = BUY_FEE_SOL + SELL_FEE_SOL;
     const netExitSol = Math.max(0, exitSol - SELL_FEE_SOL);
     const pnlSol = netExitSol - pos.entryAmountSol;
-    const pnlPct = pos.entryAmountSol > 0 ? (pnlSol / pos.entryAmountSol) * 100 : 0;
+    let pnlPct = pos.entryAmountSol > 0 ? (pnlSol / pos.entryAmountSol) * 100 : 0;
     const now = Date.now();
     const durationMs = now - pos.openedAt;
+
+    if (Math.abs(pnlPct) > 100_000) {
+      logger.warn(`[shadow] PnL sanity fail: ${mint.slice(0, 8)} pnl=${pnlPct.toFixed(0)}% — likely decimal mismatch, clamping`);
+      pnlPct = pnlPct > 0 ? 100_000 : -100;
+    }
 
     portfolio.balance += netExitSol;
     portfolio.positions.delete(mint);
