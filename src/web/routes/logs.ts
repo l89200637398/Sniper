@@ -75,31 +75,45 @@ function globFiles(dir: string, pattern: RegExp): string[] {
   }
 }
 
-/** Read lines from a log file that were logged after the given ISO timestamp.
- *  Each line must start with a JSON object containing a "time" field (pino format).
- *  Falls back to copying the whole file if parsing fails or tsMs === 0. */
-function readLinesAfter(filePath: string, tsMs: number): string {
+/** Copy lines from a log file that were logged after the given timestamp.
+ *  Uses streaming to avoid V8 string size limits on large files.
+ *  If tsMs === 0, copies the whole file directly (no parsing). */
+async function copyLinesAfter(filePath: string, destPath: string, tsMs: number): Promise<boolean> {
   if (tsMs === 0) {
-    return fs.readFileSync(filePath, 'utf8');
+    fs.copyFileSync(filePath, destPath);
+    return true;
   }
-  try {
-    const content = fs.readFileSync(filePath, 'utf8');
-    const lines = content.split('\n');
-    const filtered = lines.filter(line => {
-      if (!line.trim()) return false;
-      try {
-        // pino log lines are JSON with a numeric "time" field (epoch ms)
-        const parsed = JSON.parse(line) as Record<string, unknown>;
-        const t = Number(parsed.time);
-        return Number.isFinite(t) ? t > tsMs : true; // keep if can't parse time
-      } catch {
-        return true; // keep non-JSON lines (e.g. first line markers)
-      }
-    });
-    return filtered.join('\n');
-  } catch {
-    return '';
-  }
+  const readline = await import('readline');
+  return new Promise<boolean>((resolve) => {
+    try {
+      const input = fs.createReadStream(filePath, { encoding: 'utf8' });
+      const output = fs.createWriteStream(destPath, { encoding: 'utf8' });
+      const rl = readline.createInterface({ input, crlfDelay: Infinity });
+      let wrote = false;
+      rl.on('line', (line: string) => {
+        if (!line.trim()) return;
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          const t = Number(parsed.time);
+          if (Number.isFinite(t) && t <= tsMs) return;
+        } catch {
+          // keep non-JSON lines
+        }
+        output.write(line + '\n');
+        wrote = true;
+      });
+      rl.on('close', () => {
+        output.end();
+        resolve(wrote);
+      });
+      rl.on('error', () => {
+        output.end();
+        resolve(false);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
 }
 
 /** Sleep for ms milliseconds. */
@@ -156,14 +170,11 @@ async function performPush(): Promise<{ message: string; files: string[] }> {
     }
   }
 
-  // 4. shadow.log — lines after lastExportTs
+  // 4. shadow.log — lines after lastExportTs (streamed to avoid V8 string limit)
   const shadowLogSrc = path.join(LOGS_DIR, 'shadow.log');
   if (fs.existsSync(shadowLogSrc)) {
-    const content = readLinesAfter(shadowLogSrc, lastExportTs);
-    if (content.trim()) {
-      fs.writeFileSync(path.join(EXPORT_DIR, 'shadow.log'), content, 'utf8');
-      exportedFiles.push('shadow.log');
-    }
+    const wrote = await copyLinesAfter(shadowLogSrc, path.join(EXPORT_DIR, 'shadow.log'), lastExportTs);
+    if (wrote) exportedFiles.push('shadow.log');
   }
 
   // 5. bot-*.log and events-*.log — only files modified since lastExportTs
