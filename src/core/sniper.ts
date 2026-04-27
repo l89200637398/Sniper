@@ -225,6 +225,8 @@ export class Sniper extends EventEmitter {
 
   // Entry momentum filter: цена при первом обнаружении mint (CREATE/first buy)
   private mintFirstSeenPrice: Map<string, { price: number; ts: number }> = new Map();
+  // Scalp flag: high-liquidity pools detected during recovery (>scalpLiquidityThresholdSol)
+  private mintScalpFlag = new Map<string, boolean>();
 
   // Re-entry support: позиции, которые закрылись через trend-tracker (TP или exit по тренду)
   // и могут быть повторно открыты при возобновлении тренда.
@@ -1026,7 +1028,10 @@ export class Sniper extends EventEmitter {
 
     // Entry momentum baseline: чистим по TTL 1h (baseline устаревает)
     for (const [mint, entry] of Array.from(this.mintFirstSeenPrice.entries())) {
-      if (now - entry.ts > 60 * 60 * 1000) this.mintFirstSeenPrice.delete(mint);
+      if (now - entry.ts > 60 * 60 * 1000) {
+        this.mintFirstSeenPrice.delete(mint);
+        this.mintScalpFlag.delete(mint);
+      }
     }
 
     // Re-entry eligibility: чистим по TTL 30 min (после истечения cooldown+grace)
@@ -3657,6 +3662,7 @@ export class Sniper extends EventEmitter {
     txId: string,
     entryAmountSol: number,
     protocol: 'raydium-cpmm' | 'raydium-ammv4' | 'raydium-launch',
+    isScalp = false,
   ): Promise<void> {
     const mintStr = mint.toBase58();
     const maxAttempts = 15;
@@ -3716,7 +3722,7 @@ export class Sniper extends EventEmitter {
           mint, entryPrice, tokenAmount,
           { programId: protocol, quoteMint: config.wsolMint },
           decimals,
-          { entryAmountSol, protocol },
+          { entryAmountSol, protocol, isScalp },
         );
         this.positions.set(mintStr, pos);
         this.confirmedPositions.add(mintStr);
@@ -3727,11 +3733,11 @@ export class Sniper extends EventEmitter {
 
         this.pendingRaydiumBuys.delete(mintStr);
         logger.info(
-          `📈 Raydium ${protocol} position confirmed: ` +
+          `📈 Raydium ${protocol}${isScalp ? ' SCALP' : ''} position confirmed: ` +
           `${tokenAmount.toFixed(0)} tokens at ${entryPrice.toExponential(4)} SOL/token ` +
           `(tx: ${txId.slice(0, 8)})`
         );
-        logEvent('RAYDIUM_POSITION_CONFIRMED', { mint: mintStr, protocol, txId, tokenAmount, entryPrice, attempt: attempt + 1 });
+        logEvent('RAYDIUM_POSITION_CONFIRMED', { mint: mintStr, protocol, txId, tokenAmount, entryPrice, attempt: attempt + 1, isScalp });
         return;
       } catch (err) {
         logger.debug(`[raydium-confirm] Poll attempt ${attempt + 1} for ${mintStr.slice(0, 8)}: ${err}`);
@@ -3753,7 +3759,7 @@ export class Sniper extends EventEmitter {
             mint, entryPrice, tokenAmount,
             { programId: protocol, quoteMint: config.wsolMint },
             decimals,
-            { entryAmountSol, protocol },
+            { entryAmountSol, protocol, isScalp },
           );
           this.positions.set(mintStr, pos);
           this.confirmedPositions.add(mintStr);
@@ -3762,9 +3768,9 @@ export class Sniper extends EventEmitter {
           await this.savePositions();
 
           logger.warn(
-            `🔄 Raydium ${protocol} timeout but ATA has ${tokenAmount} tokens — position restored (tx: ${txId.slice(0, 8)})`
+            `🔄 Raydium ${protocol}${isScalp ? ' SCALP' : ''} timeout but ATA has ${tokenAmount} tokens — position restored (tx: ${txId.slice(0, 8)})`
           );
-          logEvent('RAYDIUM_POSITION_TIMEOUT_RESTORED', { mint: mintStr, protocol, tokenAmount, entryPrice });
+          logEvent('RAYDIUM_POSITION_TIMEOUT_RESTORED', { mint: mintStr, protocol, tokenAmount, entryPrice, isScalp });
           this.pendingRaydiumBuys.delete(mintStr);
           return;
         }
@@ -4426,6 +4432,9 @@ export class Sniper extends EventEmitter {
         return;
       }
 
+      const isScalp = solReserveSol >= config.strategy.scalpLiquidityThresholdSol;
+      this.mintScalpFlag.set(mint, isScalp);
+
       updateMintState(mintPk, {
         isRaydiumCpmm: true,
         raydiumPool: poolId,
@@ -4435,8 +4444,8 @@ export class Sniper extends EventEmitter {
 
       if (config.trend.enabled) {
         this.trendTracker.track(mint, 'raydium-cpmm');
-        logger.info(`🔄 Raydium CPMM RECOVERY: ${mint.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
-        logEvent('RAYDIUM_CPMM_RECOVERY', { mint, pool: poolId.toBase58(), liquiditySol: solReserveSol });
+        logger.info(`🔄 Raydium CPMM RECOVERY${isScalp ? ' SCALP' : ''}: ${mint.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
+        logEvent('RAYDIUM_CPMM_RECOVERY', { mint, pool: poolId.toBase58(), liquiditySol: solReserveSol, isScalp });
       }
 
       // Baseline для entry momentum (price = SOL lamports per raw token)
@@ -4479,14 +4488,17 @@ export class Sniper extends EventEmitter {
         return;
       }
 
+      const isScalp = solReserveSol >= config.strategy.scalpLiquidityThresholdSol;
+      this.mintScalpFlag.set(mintStr, isScalp);
+
       updateMintState(mint, { isRaydiumAmmV4: true, raydiumPool: poolPk });
       this.raydiumPoolToMint.set(poolStr, { mint: mintStr, protocol: 'raydium-ammv4' });
       this.seenMints.set(mintStr, Date.now());
 
       if (config.trend.enabled) {
         this.trendTracker.track(mintStr, 'raydium-ammv4');
-        logger.info(`🔄 Raydium AMM v4 RECOVERY: ${mintStr.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
-        logEvent('RAYDIUM_AMMV4_RECOVERY', { mint: mintStr, pool: poolStr, liquiditySol: solReserveSol });
+        logger.info(`🔄 Raydium AMM v4 RECOVERY${isScalp ? ' SCALP' : ''}: ${mintStr.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
+        logEvent('RAYDIUM_AMMV4_RECOVERY', { mint: mintStr, pool: poolStr, liquiditySol: solReserveSol, isScalp });
       }
 
       // Baseline для entry momentum
@@ -4816,13 +4828,14 @@ export class Sniper extends EventEmitter {
             return;
           }
           const mintPub = new PublicKey(mint);
-          const cpmmCfg = config.strategy.raydiumCpmm;
+          const cpmmIsScalp = this.mintScalpFlag.get(mint) ?? false;
+          const cpmmCfg = cpmmIsScalp ? config.strategy.scalping : config.strategy.raydiumCpmm;
           const entryAmt = Math.max(cpmmCfg.entryAmountSol * entryMultiplier, cpmmCfg.minEntryAmountSol);
-          const txId = await buyTokenCpmm(this.connection, mintPub, this.payer, entryAmt, cpmmCfg.slippageBps);
-          logger.info(`🟢 TREND Raydium CPMM buy sent: ${txId} for ${mint.slice(0, 8)} (entry=${entryAmt})`);
-          logEvent('TREND_RAYDIUM_CPMM_BUY_SENT', { mint, txId, entry: entryAmt, reEntry: entryMultiplier < 1 });
+          const txId = await buyTokenCpmm(this.connection, mintPub, this.payer, entryAmt, config.strategy.raydiumCpmm.slippageBps);
+          logger.info(`🟢 TREND Raydium CPMM${cpmmIsScalp ? ' SCALP' : ''} buy sent: ${txId} for ${mint.slice(0, 8)} (entry=${entryAmt})`);
+          logEvent('TREND_RAYDIUM_CPMM_BUY_SENT', { mint, txId, entry: entryAmt, reEntry: entryMultiplier < 1, isScalp: cpmmIsScalp });
           this.pendingRaydiumBuys.add(mint);
-          this.confirmAndCreateRaydiumPosition(mintPub, txId, entryAmt, 'raydium-cpmm').catch(err =>
+          this.confirmAndCreateRaydiumPosition(mintPub, txId, entryAmt, 'raydium-cpmm', cpmmIsScalp).catch(err =>
             logger.error(`[trend] Raydium CPMM confirm error for ${mint}:`, err)
           );
         } catch (err) {
@@ -4841,13 +4854,14 @@ export class Sniper extends EventEmitter {
             return;
           }
           const mintPub = new PublicKey(mint);
-          const v4Cfg = config.strategy.raydiumAmmV4;
+          const v4IsScalp = this.mintScalpFlag.get(mint) ?? false;
+          const v4Cfg = v4IsScalp ? config.strategy.scalping : config.strategy.raydiumAmmV4;
           const entryAmt = Math.max(v4Cfg.entryAmountSol * entryMultiplier, v4Cfg.minEntryAmountSol);
-          const txId = await buyTokenAmmV4(this.connection, mintPub, this.payer, entryAmt, v4Cfg.slippageBps);
-          logger.info(`🟢 TREND Raydium AMM v4 buy sent: ${txId} for ${mint.slice(0, 8)} (entry=${entryAmt})`);
-          logEvent('TREND_RAYDIUM_AMM_V4_BUY_SENT', { mint, txId, entry: entryAmt, reEntry: entryMultiplier < 1 });
+          const txId = await buyTokenAmmV4(this.connection, mintPub, this.payer, entryAmt, config.strategy.raydiumAmmV4.slippageBps);
+          logger.info(`🟢 TREND Raydium AMM v4${v4IsScalp ? ' SCALP' : ''} buy sent: ${txId} for ${mint.slice(0, 8)} (entry=${entryAmt})`);
+          logEvent('TREND_RAYDIUM_AMM_V4_BUY_SENT', { mint, txId, entry: entryAmt, reEntry: entryMultiplier < 1, isScalp: v4IsScalp });
           this.pendingRaydiumBuys.add(mint);
-          this.confirmAndCreateRaydiumPosition(mintPub, txId, entryAmt, 'raydium-ammv4').catch(err =>
+          this.confirmAndCreateRaydiumPosition(mintPub, txId, entryAmt, 'raydium-ammv4', v4IsScalp).catch(err =>
             logger.error(`[trend] Raydium AMM v4 confirm error for ${mint}:`, err)
           );
         } catch (err) {
@@ -4946,12 +4960,14 @@ export class Sniper extends EventEmitter {
           logEvent('TREND_SKIP', { mint, reason: 'social_raydium_cpmm_pending', protocol: 'raydium-cpmm' });
           return;
         }
-        const cpmmCfg = config.strategy.raydiumCpmm;
-        const txId = await buyTokenCpmm(this.connection, mintPub, this.payer, cpmmCfg.entryAmountSol, cpmmCfg.slippageBps);
-        logger.info(`🟢 TREND social Raydium CPMM buy: ${txId} for ${mint.slice(0, 8)}`);
-        logEvent('TREND_RAYDIUM_CPMM_BUY_SENT', { mint, txId });
+        const socCpmmScalp = this.mintScalpFlag.get(mint) ?? false;
+        const socCpmmCfg = socCpmmScalp ? config.strategy.scalping : config.strategy.raydiumCpmm;
+        const socCpmmEntry = socCpmmCfg.entryAmountSol;
+        const txId = await buyTokenCpmm(this.connection, mintPub, this.payer, socCpmmEntry, config.strategy.raydiumCpmm.slippageBps);
+        logger.info(`🟢 TREND social Raydium CPMM${socCpmmScalp ? ' SCALP' : ''} buy: ${txId} for ${mint.slice(0, 8)}`);
+        logEvent('TREND_RAYDIUM_CPMM_BUY_SENT', { mint, txId, isScalp: socCpmmScalp });
         this.pendingRaydiumBuys.add(mint);
-        this.confirmAndCreateRaydiumPosition(mintPub, txId, cpmmCfg.entryAmountSol, 'raydium-cpmm').catch(err =>
+        this.confirmAndCreateRaydiumPosition(mintPub, txId, socCpmmEntry, 'raydium-cpmm', socCpmmScalp).catch(err =>
           logger.error(`[trend] Social Raydium CPMM confirm error for ${mint}:`, err)
         );
       } else if (protocol.protocol === 'raydium-ammv4') {
@@ -4963,12 +4979,14 @@ export class Sniper extends EventEmitter {
           logEvent('TREND_SKIP', { mint, reason: 'social_raydium_ammv4_pending', protocol: 'raydium-ammv4' });
           return;
         }
-        const v4Cfg = config.strategy.raydiumAmmV4;
-        const txId = await buyTokenAmmV4(this.connection, mintPub, this.payer, v4Cfg.entryAmountSol, v4Cfg.slippageBps);
-        logger.info(`🟢 TREND social Raydium AMM v4 buy: ${txId} for ${mint.slice(0, 8)}`);
-        logEvent('TREND_RAYDIUM_AMM_V4_BUY_SENT', { mint, txId });
+        const socV4Scalp = this.mintScalpFlag.get(mint) ?? false;
+        const socV4Cfg = socV4Scalp ? config.strategy.scalping : config.strategy.raydiumAmmV4;
+        const socV4Entry = socV4Cfg.entryAmountSol;
+        const txId = await buyTokenAmmV4(this.connection, mintPub, this.payer, socV4Entry, config.strategy.raydiumAmmV4.slippageBps);
+        logger.info(`🟢 TREND social Raydium AMM v4${socV4Scalp ? ' SCALP' : ''} buy: ${txId} for ${mint.slice(0, 8)}`);
+        logEvent('TREND_RAYDIUM_AMM_V4_BUY_SENT', { mint, txId, isScalp: socV4Scalp });
         this.pendingRaydiumBuys.add(mint);
-        this.confirmAndCreateRaydiumPosition(mintPub, txId, v4Cfg.entryAmountSol, 'raydium-ammv4').catch(err =>
+        this.confirmAndCreateRaydiumPosition(mintPub, txId, socV4Entry, 'raydium-ammv4', socV4Scalp).catch(err =>
           logger.error(`[trend] Social Raydium AMM v4 confirm error for ${mint}:`, err)
         );
       } else if (protocol.protocol === 'pumpfun') {

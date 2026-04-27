@@ -79,6 +79,7 @@ export class Position {
   public updateErrors: number = 0;
 
   public lastBuyActivityTs: number;
+  public isScalp: boolean = false;
   public whaleSnapshot: Map<string, number> = new Map();
   public whaleLastCheckTs: number = 0;
 
@@ -103,6 +104,7 @@ export class Position {
       creator?: string;
       openedAt?: number;
       cashbackEnabled?: boolean;
+      isScalp?: boolean;
     } = {}
   ) {
     this.mint = mint;
@@ -121,7 +123,8 @@ export class Position {
     this.drawdownStart = null;
     this.trailingActivated = false;
 
-    const initExit = this.protocol === 'pumpswap'        ? config.strategy.pumpSwap.exit
+    const initExit = this.isScalp                         ? config.strategy.scalping.exit
+                   : this.protocol === 'pumpswap'        ? config.strategy.pumpSwap.exit
                    : this.protocol === 'mayhem'          ? config.strategy.mayhem.exit
                    : this.protocol === 'raydium-launch'  ? config.strategy.raydiumLaunch.exit
                    : this.protocol === 'raydium-cpmm'    ? config.strategy.raydiumCpmm.exit
@@ -141,6 +144,7 @@ export class Position {
     this.feeRecipientUsed = options.feeRecipientUsed;
     this.creator = options.creator;
     this.cashbackEnabled = options.cashbackEnabled ?? false;
+    this.isScalp = options.isScalp ?? false;
     this.lastBuyActivityTs = this.openedAt;
   }
 
@@ -502,6 +506,7 @@ export class Position {
   }
 
   private getExitConfig() {
+    if (this.isScalp) return config.strategy.scalping.exit;
     switch (this.protocol) {
       case 'pump.fun':        return config.strategy.pumpFun.exit;
       case 'pumpswap':        return config.strategy.pumpSwap.exit;
