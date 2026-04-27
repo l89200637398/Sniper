@@ -11,6 +11,7 @@ interface ShadowPosition {
   pnlPercent: number;
   entrySol: number;
   durationMs: number;
+  isScalp?: boolean;
 }
 
 interface ShadowProfile {
@@ -50,6 +51,7 @@ interface TradeLogEntry {
   openedAt: number;
   closedAt: number;
   feesSol: number;
+  isScalp?: boolean;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -416,7 +418,10 @@ export function Shadow() {
                         {shortMint(pos.mint)}...
                       </a>
                     </td>
-                    <td className="px-3 py-2 text-zinc-400">{pos.protocol}</td>
+                    <td className="px-3 py-2 text-zinc-400">
+                      {pos.protocol}
+                      {pos.isScalp && <span className="ml-1.5 text-[10px] font-semibold bg-cyan-600/30 text-cyan-300 px-1 py-0.5 rounded">SCALP</span>}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono">{pos.entrySol.toFixed(4)}</td>
                     <td className={`px-3 py-2 text-right font-mono ${pnlColor(pos.pnlPercent)}`}>
                       {pnlSign(pos.pnlPercent)}{pos.pnlPercent.toFixed(1)}%
@@ -475,7 +480,10 @@ export function Shadow() {
                         {shortMint(t.mint)}...
                       </a>
                     </td>
-                    <td className="px-3 py-2 text-zinc-400">{t.protocol}</td>
+                    <td className="px-3 py-2 text-zinc-400">
+                      {t.protocol}
+                      {t.isScalp && <span className="ml-1.5 text-[10px] font-semibold bg-cyan-600/30 text-cyan-300 px-1 py-0.5 rounded">SCALP</span>}
+                    </td>
                     <td className="px-3 py-2 text-right font-mono">{t.entrySol.toFixed(4)}</td>
                     <td className="px-3 py-2 text-right font-mono">{t.exitSol.toFixed(4)}</td>
                     <td className={`px-3 py-2 text-right font-mono ${pnlColor(t.pnlPct)}`}>

@@ -93,6 +93,7 @@ export interface TradeLogEntry {
   openedAt: number;
   closedAt: number;
   feesSol: number;
+  isScalp?: boolean;
 }
 
 export interface ShadowStatus {
@@ -1748,6 +1749,7 @@ export class ShadowEngine extends EventEmitter {
       exitReason: reason, durationMs,
       openedAt: pos.openedAt, closedAt: now,
       feesSol: totalFees,
+      isScalp: pos.isScalp || undefined,
     };
     this.shadowTradeLog.push(entry);
 
@@ -1843,6 +1845,7 @@ export class ShadowEngine extends EventEmitter {
         exitReason: 'token_lost', durationMs,
         openedAt: pos.openedAt, closedAt: now,
         feesSol: BUY_FEE_SOL,
+        isScalp: pos.isScalp || undefined,
       };
       this.shadowTradeLog.push(entry);
       this.emit('shadow:trade', { type: 'close', ...entry });
@@ -2058,6 +2061,7 @@ export class ShadowEngine extends EventEmitter {
         pnlPercent: pos.pnlPercent,
         entrySol: pos.entryAmountSol,
         durationMs: now - pos.openedAt,
+        isScalp: pos.isScalp,
       }));
       return {
         name,
