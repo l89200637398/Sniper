@@ -420,7 +420,8 @@ export class Position {
         && age >= (dvCfg.minAgeMs ?? 15_000) && this.pnlPercent > -exit.entryStopLossPercent
         && this.pnlPercent <= 8) {
       const silenceMs = now - this.lastBuyActivityTs;
-      const dvTimeout = dvCfg.protocolTimeouts?.[this.protocol] ?? dvCfg.timeoutMs ?? 60_000;
+      const scalpDvTimeout = this.isScalp ? (dvCfg.scalpTimeoutMs ?? 45_000) : undefined;
+      const dvTimeout = scalpDvTimeout ?? dvCfg.protocolTimeouts?.[this.protocol] ?? dvCfg.timeoutMs ?? 60_000;
       if (silenceMs >= dvTimeout) {
         logger.debug(`[${mintStr}] dead_volume: no buy activity for ${(silenceMs / 1000).toFixed(0)}s (timeout=${dvTimeout / 1000}s, proto=${this.protocol})`);
         logEvent('SHOULD_SELL_TRIGGER', {
