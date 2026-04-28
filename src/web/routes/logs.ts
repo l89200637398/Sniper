@@ -218,6 +218,14 @@ async function performPush(): Promise<{ message: string; files: string[] }> {
   // Remove the full archive (only keep chunks)
   try { fs.unlinkSync(archivePath); } catch { /* ignore */ }
 
+  // 7b. Remove raw files from EXPORT_DIR — only keep chunk-* for git push
+  //     Raw files (sniper.db, logs) can exceed GitHub's 100MB limit.
+  for (const f of fs.readdirSync(EXPORT_DIR)) {
+    if (!f.startsWith('chunk-')) {
+      try { fs.unlinkSync(path.join(EXPORT_DIR, f)); } catch { /* ignore */ }
+    }
+  }
+
   // 8. git add -f + commit + push (4 attempts with exp. backoff)
   await run(`git add -f "${EXPORT_DIR}"`);
 
