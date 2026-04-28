@@ -353,8 +353,8 @@ export const config = {
 
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
     pumpFun: {
-      entryAmountSol:    0.08,               // 0.05→0.08: breakeven WR 77%→58% при увеличенном entry (overhead ratio 7.4%→4.6%)
-      minEntryAmountSol: 0.05,               // 0.03→0.05: min поднят пропорционально
+      entryAmountSol:    0.05,               // 0.08→0.05: shadow 3% WR, 166/217=stagnation — минимизируем bleeding
+      minEntryAmountSol: 0.03,               // 0.05→0.03: min снижен пропорционально
       minLiquiditySol:   0.04,
       slippageBps:       2000,               // E: 2500→2000: tighter slippage, rejects illiquid pools
       exit: {
@@ -391,8 +391,8 @@ export const config = {
 
     // ── PumpSwap AMM ──────────────────────────────────────────────────────────
     pumpSwap: {
-      entryAmountSol:        0.14,   // 0.15→0.14: shadow aggressive (best EV: +592% on 5xgCS9xA)
-      minEntryAmountSol:     0.08,   // shadow aggressive min
+      entryAmountSol:        0.12,   // 0.14→0.12: shadow balanced (0.10) был near break-even (-0.003), aggressive (0.14) хуже — ищем sweet spot
+      minEntryAmountSol:     0.07,   // 0.08→0.07: пропорционально снижен
       minLiquiditySol:       1,
       slippageBps:           1500,   // E: 1800→1500: tighter PumpSwap slippage
       maxReserveFraction:    0.20,
@@ -427,8 +427,8 @@ export const config = {
     },
 
     // ── Общие параметры (fallback) ────────────────────────────────────────────
-    entryAmountSol:    0.05,         // 0.10→0.05: conservative fallback
-    minEntryAmountSol: 0.03,         // conservative min
+    entryAmountSol:    0.06,         // 0.05→0.06: fallback чуть выше для снижения overhead ratio
+    minEntryAmountSol: 0.04,         // 0.03→0.04: пропорционально
     minLiquiditySol:   0.05,
     slippageBps:       1500,
     exit: {
@@ -457,7 +457,7 @@ export const config = {
     // ── Raydium LaunchLab (bonding curve) ─────────────────────────────────
     maxRaydiumLaunchPositions: 1,     // 2→1: risky bonding curve, только анонсированные токены
     raydiumLaunch: {
-      entryAmountSol:    0.05,       // 0.08→0.05: conservative — raydium-launch 0% WR
+      entryAmountSol:    0.04,       // 0.05→0.04: shadow 0% WR (11 trades, 10=stagnation) — минимальный лотерейный билет
       minEntryAmountSol: 0.03,
       minLiquiditySol:   0.04,
       slippageBps:       2000,   // E: 2500→2000
@@ -491,8 +491,8 @@ export const config = {
     // ── Raydium CPMM (AMM) ───────────────────────────────────────────────
     maxRaydiumCpmmPositions: 3,       // 2→3: +1 for scalp (established pools)
     raydiumCpmm: {
-      entryAmountSol:        0.05,   // 0.08→0.05: conservative — CPMM 0% WR in shadow
-      minEntryAmountSol:     0.03,
+      entryAmountSol:        0.08,   // 0.05→0.08: лучший не-PS протокол (14.3% WR shadow), overhead ratio 6%→3.8%
+      minEntryAmountSol:     0.05,   // 0.03→0.05: пропорционально
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,
@@ -526,8 +526,8 @@ export const config = {
     // ── Raydium AMM v4 (legacy) ──────────────────────────────────────────
     maxRaydiumAmmV4Positions: 3,      // 1→3: established pools with scalping now included
     raydiumAmmV4: {
-      entryAmountSol:        0.05,   // 0.06→0.05: conservative — AMM v4 0% WR
-      minEntryAmountSol:     0.03,
+      entryAmountSol:        0.06,   // 0.05→0.06: shadow 7% WR, trailing_stop winner +143%, минимальный рост для overhead
+      minEntryAmountSol:     0.04,   // 0.03→0.04: пропорционально
       minLiquiditySol:       1,
       slippageBps:           1800,
       maxReserveFraction:    0.15,
