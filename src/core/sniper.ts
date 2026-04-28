@@ -149,6 +149,10 @@ export class Sniper extends EventEmitter {
   private startedAt: number = 0;
   private totalTrades: number = 0;
   private winTrades: number = 0;
+  private eventsDetected: number = 0;
+  private eventsEntered: number = 0;
+  private eventsExited: number = 0;
+  private eventsSkipped: number = 0;
   private isCheckingPositions = false;
   private monitoringInterval: NodeJS.Timeout | null = null;
   private feeRecipient: PublicKey | null = null;
@@ -2606,6 +2610,7 @@ export class Sniper extends EventEmitter {
       logEvent(isMayhemPos ? 'MAYHEM_OPTIMISTIC_POSITION' : 'OPTIMISTIC_POSITION', { mint: token.mint, txId, expectedTokens, entryPrice });
 
       this.positions.set(token.mint, position);
+      this.eventsEntered++;
       this.emit('position:open', {
         mint: position.mint.toBase58(),
         protocol: position.protocol,
@@ -4594,14 +4599,15 @@ export class Sniper extends EventEmitter {
   // ═══ Trend-Confirmed Entry Handlers ═══════════════════════════════════════
 
   private async onTrendConfirmed(mint: string, metrics: TrendMetrics) {
-    if (!this.running) { logEvent('TREND_SKIP', { mint, reason: 'not_running' }); return; }
-    if (this.positions.has(mint)) { logEvent('TREND_SKIP', { mint, reason: 'position_exists' }); return; }
-    if (this.sellingMints.has(mint)) { logEvent('TREND_SKIP', { mint, reason: 'selling_in_progress' }); return; }
-    if (this.failedSellMints.has(mint)) { logEvent('TREND_SKIP', { mint, reason: 'failed_sell_blocked' }); return; }
+    this.eventsDetected++;
+    if (!this.running) { this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'not_running' }); return; }
+    if (this.positions.has(mint)) { this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'position_exists' }); return; }
+    if (this.sellingMints.has(mint)) { this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'selling_in_progress' }); return; }
+    if (this.failedSellMints.has(mint)) { this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'failed_sell_blocked' }); return; }
 
     // ── seenMints guard: не покупаем повторно токены, виденные в последний час ──
     if (this.seenMints.has(mint) && !this.reEntryEligible.has(mint)) {
-      logEvent('TREND_SKIP', { mint, reason: 'recently_seen' });
+      this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'recently_seen' });
       return;
     }
 
@@ -4618,11 +4624,11 @@ export class Sniper extends EventEmitter {
         logger.debug(`[re-entry] ${mint.slice(0,8)} max re-entries reached (${reInfo.count})`);
         this.reEntryEligible.delete(mint);
         this.trendTracker.remove(mint);
-        logEvent('TREND_SKIP', { mint, reason: 'reentry_max_reached', protocol: metrics.protocol, count: reInfo.count, max: reCfg.maxReEntries ?? 2 });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'reentry_max_reached', protocol: metrics.protocol, count: reInfo.count, max: reCfg.maxReEntries ?? 2 });
         return;
       } else if (Date.now() - reInfo.closedAt < (reCfg.cooldownMs ?? 30_000)) {
         logger.debug(`[re-entry] ${mint.slice(0,8)} still in cooldown`);
-        logEvent('TREND_SKIP', { mint, reason: 'reentry_cooldown', protocol: metrics.protocol, elapsedMs: Date.now() - reInfo.closedAt, cooldownMs: reCfg.cooldownMs ?? 30_000 });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'reentry_cooldown', protocol: metrics.protocol, elapsedMs: Date.now() - reInfo.closedAt, cooldownMs: reCfg.cooldownMs ?? 30_000 });
         return;
       } else {
         entryMultiplier = reCfg.entryMultiplier ?? 0.5;
@@ -4633,7 +4639,7 @@ export class Sniper extends EventEmitter {
 
     if (this.positions.size >= config.strategy.maxPositions) {
       logger.debug(`[trend] ${mint.slice(0, 8)} confirmed but max positions reached`);
-      logEvent('TREND_SKIP', { mint, reason: 'max_positions', protocol: metrics.protocol, current: this.positions.size, max: config.strategy.maxPositions });
+      this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'max_positions', protocol: metrics.protocol, current: this.positions.size, max: config.strategy.maxPositions });
       this.trendTracker.remove(mint);
       this.trendTokenData.delete(mint);
       return;
@@ -4642,7 +4648,7 @@ export class Sniper extends EventEmitter {
     const totalExposure = [...this.positions.values()].reduce((s, p) => s + p.entryAmountSol, 0);
     if (totalExposure >= config.strategy.maxTotalExposureSol) {
       logger.warn(`[trend] ${mint.slice(0, 8)} confirmed but exposure limit reached (${totalExposure.toFixed(3)})`);
-      logEvent('TREND_SKIP', { mint, reason: 'max_exposure', protocol: metrics.protocol, currentExposure: totalExposure, maxExposure: config.strategy.maxTotalExposureSol });
+      this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'max_exposure', protocol: metrics.protocol, currentExposure: totalExposure, maxExposure: config.strategy.maxTotalExposureSol });
       this.trendTracker.remove(mint);
       this.trendTokenData.delete(mint);
       return;
@@ -4657,7 +4663,7 @@ export class Sniper extends EventEmitter {
           r.includes('HONEYPOT') || r.includes('freeze_authority'),
         );
         if (!isMigrated || hasCriticalRisk) {
-          logEvent('TREND_SKIP', { mint, reason: 'rugcheck_high_risk', protocol: metrics.protocol, score: rugResult.score, risks: rugResult.risks, isMigrated, hasCriticalRisk });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'rugcheck_high_risk', protocol: metrics.protocol, score: rugResult.score, risks: rugResult.risks, isMigrated, hasCriticalRisk });
           this.trendTracker.remove(mint);
           this.trendTokenData.delete(mint);
           return;
@@ -4675,7 +4681,7 @@ export class Sniper extends EventEmitter {
         const isAmmProtocol = ['pumpswap', 'raydium-cpmm', 'raydium-ammv4'].includes(metrics.protocol);
         const isFreezeIssue = safetyResult.reason?.includes('Freeze authority');
         if (!isAmmProtocol || isFreezeIssue) {
-          logEvent('TREND_SKIP', { mint, reason: 'safety_failed', protocol: metrics.protocol, safetyReason: safetyResult.reason });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'safety_failed', protocol: metrics.protocol, safetyReason: safetyResult.reason });
           this.trendTracker.remove(mint);
           this.trendTokenData.delete(mint);
           return;
@@ -4689,7 +4695,7 @@ export class Sniper extends EventEmitter {
       if (trendTokenCreator) {
         const creatorHist = checkCreatorHistory(trendTokenCreator);
         if (creatorHist.shouldBlock) {
-          logEvent('TREND_SKIP', {
+          this.eventsSkipped++; logEvent('TREND_SKIP', {
             mint,
             reason: 'creator_serial_rugger',
             protocol: metrics.protocol,
@@ -4715,7 +4721,7 @@ export class Sniper extends EventEmitter {
       if (creator && (config.strategy as any).creatorBalanceCheck?.enabled) {
         const bal = await getCreatorBalance(this.connection, creator).catch(() => undefined);
         if (bal !== undefined && bal < ((config.strategy as any).creatorBalanceCheck?.minSol ?? 0.5)) {
-          logEvent('TREND_SKIP', { mint, reason: 'creator_low_balance', protocol: metrics.protocol, creatorBalance: bal });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'creator_low_balance', protocol: metrics.protocol, creatorBalance: bal });
           logger.info(`[trend] Low creator balance ${bal.toFixed(3)} SOL — skip ${mint.slice(0, 8)}`);
           this.trendTracker.remove(mint);
           this.trendTokenData.delete(mint);
@@ -4728,7 +4734,7 @@ export class Sniper extends EventEmitter {
     if ((config.strategy as any).token2022Check?.enabled) {
       const t22 = await checkToken2022Extensions(this.connection, new PublicKey(mint)).catch(() => ({ isDangerous: false, extensions: [] }));
       if (t22.isDangerous) {
-        logEvent('TREND_SKIP', { mint, reason: 'token2022_dangerous', protocol: metrics.protocol, extensions: t22.extensions });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'token2022_dangerous', protocol: metrics.protocol, extensions: t22.extensions });
         logger.info(`[trend] Dangerous Token-2022 extensions: ${t22.extensions.join(',')} — skip ${mint.slice(0, 8)}`);
         this.trendTracker.remove(mint);
         this.trendTokenData.delete(mint);
@@ -4741,7 +4747,7 @@ export class Sniper extends EventEmitter {
       const threshold = (config.strategy as any).bundledBuyDetection?.threshold ?? 5;
       const bundled = detectBundledBuys(mint, threshold);
       if (bundled.isBundled) {
-        logEvent('TREND_SKIP', { mint, reason: 'bundled_buy_detected', protocol: metrics.protocol, maxWallets: bundled.maxWalletsInSlot, sameSlotSol: bundled.sameSlotSol });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'bundled_buy_detected', protocol: metrics.protocol, maxWallets: bundled.maxWalletsInSlot, sameSlotSol: bundled.sameSlotSol });
         logger.info(`[trend] Bundled buy detected: ${bundled.maxWalletsInSlot} wallets in slot — skip ${mint.slice(0, 8)}`);
         this.trendTracker.remove(mint);
         this.trendTokenData.delete(mint);
@@ -4754,7 +4760,7 @@ export class Sniper extends EventEmitter {
       const washCreator = this.trendTokenData.get(mint)?.creator ?? this.mintCreatorMap.get(mint);
       const wash = detectWashTrading(mint, washCreator);
       if (wash.isWashTrading) {
-        logEvent('TREND_SKIP', { mint, reason: 'wash_trading', protocol: metrics.protocol, repeatBuyers: wash.repeatBuyers, totalBuyers: wash.totalBuyers });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'wash_trading', protocol: metrics.protocol, repeatBuyers: wash.repeatBuyers, totalBuyers: wash.totalBuyers });
         logger.info(`[trend] Wash trading detected: ${wash.repeatBuyers}/${wash.totalBuyers} repeat — skip ${mint.slice(0, 8)}`);
         this.trendTracker.remove(mint);
         this.trendTokenData.delete(mint);
@@ -4770,7 +4776,7 @@ export class Sniper extends EventEmitter {
         (config.strategy as any).priceStability?.maxDropPct ?? 30,
       );
       if (stability.isUnstable) {
-        logEvent('TREND_SKIP', { mint, reason: 'price_unstable', protocol: metrics.protocol, dropPct: stability.dropFromPeakPct, peak: stability.peakPrice, current: stability.currentPrice });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'price_unstable', protocol: metrics.protocol, dropPct: stability.dropFromPeakPct, peak: stability.peakPrice, current: stability.currentPrice });
         logger.info(`[trend] Price unstable: ${stability.dropFromPeakPct.toFixed(1)}% drop from peak — skip ${mint.slice(0, 8)}`);
         this.trendTracker.remove(mint);
         this.trendTokenData.delete(mint);
@@ -4782,7 +4788,7 @@ export class Sniper extends EventEmitter {
     if (!reInfo && (metrics.protocol === 'pumpswap' || metrics.protocol === 'raydium-cpmm' || metrics.protocol === 'raydium-ammv4' || metrics.protocol === 'raydium-launch')) {
       const currentPrice = await this.getCurrentPriceForReEntry(mint, metrics.protocol).catch(() => 0);
       if (currentPrice > 0 && !this.checkEntryMomentum(mint, currentPrice)) {
-        logEvent('TREND_SKIP', { mint, reason: 'entry_momentum_failed', protocol: metrics.protocol, currentPrice });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'entry_momentum_failed', protocol: metrics.protocol, currentPrice });
         this.trendTracker.remove(mint);
         this.trendTokenData.delete(mint);
         return;
@@ -4808,7 +4814,7 @@ export class Sniper extends EventEmitter {
           const psCfg = getStrategyForProtocol('pumpswap');
           if (this.pumpSwapCount >= config.strategy.maxPumpSwapPositions) {
             logger.debug(`[trend] PumpSwap slots full, skip ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
             return;
           }
           const entryAmt = Math.max(psCfg.entryAmountSol * entryMultiplier, config.strategy.minEntryAmountSol);
@@ -4828,12 +4834,12 @@ export class Sniper extends EventEmitter {
         try {
           if (this.raydiumCpmmCount >= config.strategy.maxRaydiumCpmmPositions) {
             logger.debug(`[trend] Raydium CPMM slots full, skip ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_cpmm_slots_full', protocol: 'raydium-cpmm', current: this.raydiumCpmmCount, max: config.strategy.maxRaydiumCpmmPositions });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_cpmm_slots_full', protocol: 'raydium-cpmm', current: this.raydiumCpmmCount, max: config.strategy.maxRaydiumCpmmPositions });
             return;
           }
           if (this.pendingRaydiumBuys.has(mint)) {
             logger.debug(`[trend] Raydium CPMM buy already pending for ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_cpmm_pending', protocol: 'raydium-cpmm' });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_cpmm_pending', protocol: 'raydium-cpmm' });
             return;
           }
           const mintPub = new PublicKey(mint);
@@ -4854,12 +4860,12 @@ export class Sniper extends EventEmitter {
         try {
           if (this.raydiumAmmV4Count >= config.strategy.maxRaydiumAmmV4Positions) {
             logger.debug(`[trend] Raydium AMM v4 slots full, skip ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_ammv4_slots_full', protocol: 'raydium-ammv4', current: this.raydiumAmmV4Count, max: config.strategy.maxRaydiumAmmV4Positions });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_ammv4_slots_full', protocol: 'raydium-ammv4', current: this.raydiumAmmV4Count, max: config.strategy.maxRaydiumAmmV4Positions });
             return;
           }
           if (this.pendingRaydiumBuys.has(mint)) {
             logger.debug(`[trend] Raydium AMM v4 buy already pending for ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_ammv4_pending', protocol: 'raydium-ammv4' });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_ammv4_pending', protocol: 'raydium-ammv4' });
             return;
           }
           const mintPub = new PublicKey(mint);
@@ -4880,12 +4886,12 @@ export class Sniper extends EventEmitter {
         try {
           if (this.raydiumLaunchCount >= config.strategy.maxRaydiumLaunchPositions) {
             logger.debug(`[trend] Raydium LaunchLab slots full, skip ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_launch_slots_full', protocol: 'raydium-launch', current: this.raydiumLaunchCount, max: config.strategy.maxRaydiumLaunchPositions });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_launch_slots_full', protocol: 'raydium-launch', current: this.raydiumLaunchCount, max: config.strategy.maxRaydiumLaunchPositions });
             return;
           }
           if (this.pendingRaydiumBuys.has(mint)) {
             logger.debug(`[trend] Raydium LaunchLab buy already pending for ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'raydium_launch_pending', protocol: 'raydium-launch' });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'raydium_launch_pending', protocol: 'raydium-launch' });
             return;
           }
           const mintPub = new PublicKey(mint);
@@ -4905,7 +4911,7 @@ export class Sniper extends EventEmitter {
         try {
           if (this.pumpFunCount >= config.strategy.maxPumpFunPositions) {
             logger.debug(`[trend] Pump.fun slots full, skip ${mint.slice(0, 8)}`);
-            logEvent('TREND_SKIP', { mint, reason: 'pumpfun_slots_full', protocol: 'pumpfun', current: this.pumpFunCount, max: config.strategy.maxPumpFunPositions });
+            this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'pumpfun_slots_full', protocol: 'pumpfun', current: this.pumpFunCount, max: config.strategy.maxPumpFunPositions });
             return;
           }
           await this.executePendingBuy(tokenData);
@@ -4932,7 +4938,7 @@ export class Sniper extends EventEmitter {
 
       if (protocol.protocol === 'pumpswap') {
         if (this.pumpSwapCount >= config.strategy.maxPumpSwapPositions) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
           return;
         }
         const psCfg = getStrategyForProtocol('pumpswap');
@@ -4945,11 +4951,11 @@ export class Sniper extends EventEmitter {
         );
       } else if (protocol.protocol === 'raydium-launch') {
         if (this.raydiumLaunchCount >= config.strategy.maxRaydiumLaunchPositions) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_launch_slots_full', protocol: 'raydium-launch', current: this.raydiumLaunchCount, max: config.strategy.maxRaydiumLaunchPositions });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_launch_slots_full', protocol: 'raydium-launch', current: this.raydiumLaunchCount, max: config.strategy.maxRaydiumLaunchPositions });
           return;
         }
         if (this.pendingRaydiumBuys.has(mint)) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_launch_pending', protocol: 'raydium-launch' });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_launch_pending', protocol: 'raydium-launch' });
           return;
         }
         const cfg = config.strategy.raydiumLaunch;
@@ -4962,11 +4968,11 @@ export class Sniper extends EventEmitter {
         );
       } else if (protocol.protocol === 'raydium-cpmm') {
         if (this.raydiumCpmmCount >= config.strategy.maxRaydiumCpmmPositions) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_cpmm_slots_full', protocol: 'raydium-cpmm', current: this.raydiumCpmmCount, max: config.strategy.maxRaydiumCpmmPositions });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_cpmm_slots_full', protocol: 'raydium-cpmm', current: this.raydiumCpmmCount, max: config.strategy.maxRaydiumCpmmPositions });
           return;
         }
         if (this.pendingRaydiumBuys.has(mint)) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_cpmm_pending', protocol: 'raydium-cpmm' });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_cpmm_pending', protocol: 'raydium-cpmm' });
           return;
         }
         const socCpmmScalp = this.mintScalpFlag.get(mint) ?? false;
@@ -4981,11 +4987,11 @@ export class Sniper extends EventEmitter {
         );
       } else if (protocol.protocol === 'raydium-ammv4') {
         if (this.raydiumAmmV4Count >= config.strategy.maxRaydiumAmmV4Positions) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_ammv4_slots_full', protocol: 'raydium-ammv4', current: this.raydiumAmmV4Count, max: config.strategy.maxRaydiumAmmV4Positions });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_ammv4_slots_full', protocol: 'raydium-ammv4', current: this.raydiumAmmV4Count, max: config.strategy.maxRaydiumAmmV4Positions });
           return;
         }
         if (this.pendingRaydiumBuys.has(mint)) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_raydium_ammv4_pending', protocol: 'raydium-ammv4' });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_raydium_ammv4_pending', protocol: 'raydium-ammv4' });
           return;
         }
         const socV4Scalp = this.mintScalpFlag.get(mint) ?? false;
@@ -5000,7 +5006,7 @@ export class Sniper extends EventEmitter {
         );
       } else if (protocol.protocol === 'pumpfun') {
         if (this.pumpFunCount >= config.strategy.maxPumpFunPositions) {
-          logEvent('TREND_SKIP', { mint, reason: 'social_pumpfun_slots_full', protocol: 'pumpfun', current: this.pumpFunCount, max: config.strategy.maxPumpFunPositions });
+          this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_pumpfun_slots_full', protocol: 'pumpfun', current: this.pumpFunCount, max: config.strategy.maxPumpFunPositions });
           return;
         }
         const bondingCurve = getBondingCurvePDA(mintPub);
@@ -5011,7 +5017,7 @@ export class Sniper extends EventEmitter {
         await this.executePendingBuy(syntheticToken);
       } else {
         logger.info(`[trend] Unknown protocol for social discovery ${mint.slice(0, 8)}: ${protocol.protocol}, skipping`);
-        logEvent('TREND_SKIP', { mint, reason: 'social_unknown_protocol', protocol: protocol.protocol });
+        this.eventsSkipped++; logEvent('TREND_SKIP', { mint, reason: 'social_unknown_protocol', protocol: protocol.protocol });
       }
     } catch (err) {
       logger.error(`[trend] Social discovery buy failed for ${mint}:`, err);
@@ -6817,7 +6823,7 @@ export class Sniper extends EventEmitter {
 
     clearReserveHistory(mintStr);
 
-    // Notify TG bot / analytics subscribers
+    this.eventsExited++;
     this.safeEmit('position:close', {
       mint:       mintStr,
       protocol:   position.protocol,
@@ -7490,6 +7496,25 @@ export class Sniper extends EventEmitter {
 
   public getTrendTrackedCount(): number {
     return this.trendTracker.trackedCount;
+  }
+
+  public getEventCounts() {
+    return {
+      detected: this.eventsDetected,
+      entered: this.eventsEntered,
+      exited: this.eventsExited,
+      skipped: this.eventsSkipped,
+    };
+  }
+
+  public getExposure(): number {
+    let total = 0;
+    for (const pos of this.positions.values()) total += pos.entryAmountSol;
+    return total;
+  }
+
+  public getStartBalance(): number {
+    return this.startBalance / 1e9;
   }
 
   public onTrendEvent(event: string, cb: (mint: string, metrics: TrendMetrics) => void): () => void {

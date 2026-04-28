@@ -39,12 +39,22 @@ export interface SystemStatus {
   defensiveMode: boolean;
 }
 
+export interface EventCounts {
+  detected: number;
+  entered: number;
+  exited: number;
+  skipped: number;
+}
+
 interface AppState {
   positions: Record<string, Position>;
   balanceSol: number;
   stats: { total: number; wins: number; totalPnlSol: number };
   recentTrades: TradeEvent[];
   status: SystemStatus;
+  eventCounts: EventCounts;
+  exposure: number;
+  startBalance: number;
   wsConnected: boolean;
   authFailed: boolean;
   setPositions: (positions: Position[]) => void;
@@ -54,6 +64,8 @@ interface AppState {
   setStats: (stats: { total: number; wins: number; totalPnlSol: number }) => void;
   addTrade: (trade: TradeEvent) => void;
   setStatus: (status: Partial<SystemStatus>) => void;
+  setEventCounts: (counts: EventCounts) => void;
+  setExposure: (exposure: number, startBalance: number) => void;
   setWsConnected: (connected: boolean) => void;
   setAuthFailed: (failed: boolean) => void;
 }
@@ -64,6 +76,9 @@ export const useStore = create<AppState>((set) => ({
   stats: { total: 0, wins: 0, totalPnlSol: 0 },
   recentTrades: [],
   status: { geyser: 'ok', jito: 'ok', rpcLatencyMs: 0, isRunning: false, defensiveMode: false },
+  eventCounts: { detected: 0, entered: 0, exited: 0, skipped: 0 },
+  exposure: 0,
+  startBalance: 0,
   wsConnected: false,
   authFailed: false,
 
@@ -78,6 +93,8 @@ export const useStore = create<AppState>((set) => ({
   setStats: (stats) => set({ stats }),
   addTrade: (trade) => set(s => ({ recentTrades: [trade, ...s.recentTrades].slice(0, 100) })),
   setStatus: (partial) => set(s => ({ status: { ...s.status, ...partial } })),
+  setEventCounts: (counts) => set({ eventCounts: counts }),
+  setExposure: (exposure, startBalance) => set({ exposure, startBalance }),
   setWsConnected: (connected) => set({ wsConnected: connected }),
   setAuthFailed: (failed) => set({ authFailed: failed }),
 }));
@@ -98,6 +115,8 @@ export function bindSocketToStore() {
   socket.on('snapshot', (d: any) => {
     useStore.getState().setPositions(d.positions);
     useStore.getState().setStatus({ isRunning: d.isRunning, defensiveMode: d.defensiveMode });
+    if (d.eventCounts) useStore.getState().setEventCounts(d.eventCounts);
+    if (d.exposure !== undefined) useStore.getState().setExposure(d.exposure, d.startBalance ?? 0);
   });
   socket.on('position:open', (p: Position) => useStore.getState().updatePosition(p));
   socket.on('position:update', (p: Position) => useStore.getState().updatePosition(p));
@@ -122,6 +141,13 @@ export function bindSocketToStore() {
 
   socket.on('system:status', (d: any) => {
     useStore.getState().setStatus({ isRunning: d.isRunning, defensiveMode: d.defensiveMode });
+  });
+
+  socket.on('eventCounts:update', (d: EventCounts) => {
+    useStore.getState().setEventCounts(d);
+  });
+  socket.on('exposure:update', (d: { exposure: number; startBalance: number }) => {
+    useStore.getState().setExposure(d.exposure, d.startBalance);
   });
 
   socket.on('social:signal', (s: LiveSocialSignal) => {

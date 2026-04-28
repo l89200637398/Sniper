@@ -51,6 +51,11 @@ export function registerSocketHandlers(io: Server, sniper: Sniper) {
         trackedCount: sniper.getTrendTrackedCount(),
         tracked: sniper.getTrendTrackedMints(),
       });
+      io.emit('eventCounts:update', sniper.getEventCounts());
+      io.emit('exposure:update', {
+        exposure: sniper.getExposure(),
+        startBalance: sniper.getStartBalance(),
+      });
     } catch {}
   }, 5000);
 
@@ -63,6 +68,9 @@ export function registerSocketHandlers(io: Server, sniper: Sniper) {
       isRunning: sniper.isRunning(),
       defensiveMode: sniper.isDefensiveMode(),
       trendTracked: sniper.getTrendTrackedMints(),
+      eventCounts: sniper.getEventCounts(),
+      exposure: sniper.getExposure(),
+      startBalance: sniper.getStartBalance(),
     });
 
     socket.on('sell:now', ({ mint }) => {
