@@ -48,7 +48,7 @@ import {
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
-import { config }                        from '../config';
+import { config, computeDynamicSlippage } from '../config';
 import { queueJitoSend }                 from '../infra/jito-queue';
 import { getCachedBlockhashWithHeight }  from '../infra/blockhash-cache';
 import { getCachedPriorityFee }          from '../infra/priority-fee-cache';
@@ -283,7 +283,10 @@ export async function buyTokenCpmm(
 
   const solIn         = BigInt(Math.floor(solAmount * 1e9));
   const expectedOut   = computeSwapOut(solIn, solReserve, tokenReserve);
-  const minOut        = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
+  // Dynamic slippage: reduce when entry is small relative to pool liquidity
+  const liquiditySol     = Number(solReserve) / 1e9;
+  const effectiveSlippage = computeDynamicSlippage(solAmount, liquiditySol, slippageBps);
+  const minOut        = (expectedOut * BigInt(10000 - effectiveSlippage)) / 10000n;
 
   // Determine input/output based on pool layout
   const inputMint          = isBaseToken ? pool.mintB : pool.mintA;
@@ -318,6 +321,8 @@ export async function buyTokenCpmm(
         inputTokenProgram, outputTokenProgram,
         solIn, minOut,
       ),
+      // Unwrap leftover wSOL from slippage → native SOL
+      createCloseAccountInstruction(userWsolAta, owner, owner),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
@@ -357,6 +362,7 @@ export async function buyTokenCpmm(
     minOut: minOut.toString(),
     tokenReserve: tokenReserve.toString(),
     solReserve: solReserve.toString(),
+    effectiveSlippage,
   }, { mint: mint.toBase58(), protocol: 'raydium-cpmm' });
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);

@@ -20,6 +20,8 @@ export interface ProtocolInfo {
 // C1: Protocol detection cache — terminal states (pumpswap, raydium-*) are cached permanently,
 // pumpfun is cached with short TTL (may migrate to pumpswap)
 const protocolCache = new Map<string, { info: ProtocolInfo; ts: number }>();
+const PROTOCOL_CACHE_MAX = 5000;
+const PROTOCOL_CACHE_EVICT = 1000;
 const PUMPFUN_CACHE_TTL_MS = 1_000; // 1s: reduces migration blind spot (was 5s)
 const TERMINAL_PROTOCOLS = new Set<ProtocolType>(['pumpswap', 'raydium-launch', 'raydium-cpmm', 'raydium-ammv4']);
 
@@ -49,6 +51,14 @@ export async function detectProtocol(
   const [bondingAcc, poolAcc] = await connection.getMultipleAccountsInfo([bondingCurve, pool]);
 
   const cacheAndReturn = (info: ProtocolInfo): ProtocolInfo => {
+    if (protocolCache.size >= PROTOCOL_CACHE_MAX) {
+      let evicted = 0;
+      for (const key of protocolCache.keys()) {
+        if (evicted >= PROTOCOL_CACHE_EVICT) break;
+        protocolCache.delete(key);
+        evicted++;
+      }
+    }
     protocolCache.set(mintStr, { info, ts: Date.now() });
     return info;
   };

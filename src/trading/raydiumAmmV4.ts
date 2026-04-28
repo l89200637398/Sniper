@@ -43,8 +43,9 @@ import {
   createSyncNativeInstruction,
   getAssociatedTokenAddressSync,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
-import { config }                        from '../config';
+import { config, computeDynamicSlippage } from '../config';
 import { queueJitoSend }                 from '../infra/jito-queue';
 import { getCachedBlockhashWithHeight }  from '../infra/blockhash-cache';
 import { getCachedPriorityFee }          from '../infra/priority-fee-cache';
@@ -62,6 +63,14 @@ import {
 const AMM_V4_PROGRAM = new PublicKey(RAYDIUM_AMM_V4_PROGRAM_ID);
 const WSOL_MINT      = new PublicKey(config.wsolMint);
 const FEE_BPS        = 25n; // фиксированная fee 25 bps для AMM v4
+
+/** Resolve token program for a mint (TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID) */
+async function resolveTokenProgram(connection: Connection, mint: PublicKey): Promise<PublicKey> {
+  const info = await withRpcLimit(() => connection.getAccountInfo(mint));
+  if (!info) throw new Error(`Mint account not found: ${mint.toBase58()}`);
+  if (info.owner.equals(TOKEN_2022_PROGRAM_ID)) return TOKEN_2022_PROGRAM_ID;
+  return TOKEN_PROGRAM_ID;
+}
 
 function encodeU64(v: bigint): Buffer {
   const buf = Buffer.alloc(8);
@@ -272,12 +281,18 @@ export async function buyTokenAmmV4(
   const feeNum      = pool.tradeFeeNum > 0n ? pool.tradeFeeNum : FEE_BPS;
   const feeDen      = pool.tradeFeeDen > 0n ? pool.tradeFeeDen : 10000n;
   const expectedOut = computeSwapOut(solIn, solReserve, tokenReserve, feeNum, feeDen);
-  const minOut      = (expectedOut * BigInt(10000 - slippageBps)) / 10000n;
+  // Dynamic slippage: reduce when entry is small relative to pool liquidity
+  const liquiditySol     = Number(solReserve) / 1e9;
+  const effectiveSlippage = computeDynamicSlippage(solAmount, liquiditySol, slippageBps);
+  const minOut      = (expectedOut * BigInt(10000 - effectiveSlippage)) / 10000n;
+
+  // Resolve token program (TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID)
+  const tokenProgramId = await resolveTokenProgram(connection, mint);
 
   // AMM v4: vaultA=baseVault(coin), vaultB=quoteVault(pc)
   // Buy: input=wSOL (quote side), output=token (base side)
   const userWsolAta  = getAssociatedTokenAddressSync(WSOL_MINT, owner, false, TOKEN_PROGRAM_ID);
-  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
+  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, tokenProgramId);
 
   const buildTx = async (): Promise<VersionedTransaction> => {
     const { blockhash } = await getCachedBlockhashWithHeight();
@@ -285,7 +300,7 @@ export async function buyTokenAmmV4(
       ComputeBudgetProgram.setComputeUnitLimit({ units: config.compute.unitLimit }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee }),
       createAssociatedTokenAccountIdempotentInstruction(
-        owner, userTokenAta, owner, mint, TOKEN_PROGRAM_ID,
+        owner, userTokenAta, owner, mint, tokenProgramId,
       ),
       createAssociatedTokenAccountIdempotentInstruction(
         owner, userWsolAta, owner, WSOL_MINT, TOKEN_PROGRAM_ID,
@@ -298,6 +313,8 @@ export async function buyTokenAmmV4(
         userTokenAta,  // output = token
         solIn, minOut,
       ),
+      // Unwrap leftover wSOL from slippage → native SOL
+      createCloseAccountInstruction(userWsolAta, owner, owner),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,
@@ -335,6 +352,8 @@ export async function buyTokenAmmV4(
     minOut: minOut.toString(),
     tokenReserve: tokenReserve.toString(),
     solReserve: solReserve.toString(),
+    tokenProgramId: tokenProgramId.toBase58(),
+    effectiveSlippage,
   }, { mint: mint.toBase58(), protocol: 'raydium-ammv4' });
 
   const txId = await queueJitoSend(buildTx, payer, 0, true);
@@ -368,7 +387,10 @@ export async function sellTokenAmmV4(
   const expectedSol = computeSwapOut(tokenAmountRaw, tokenReserve, solReserve, feeNum, feeDen);
   const minSolOut   = (expectedSol * BigInt(10000 - slippageBps)) / 10000n;
 
-  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, TOKEN_PROGRAM_ID);
+  // Resolve token program (TOKEN_PROGRAM_ID or TOKEN_2022_PROGRAM_ID)
+  const tokenProgramId = await resolveTokenProgram(connection, mint);
+
+  const userTokenAta = getAssociatedTokenAddressSync(mint, owner, false, tokenProgramId);
   const userWsolAta  = getAssociatedTokenAddressSync(WSOL_MINT, owner, false, TOKEN_PROGRAM_ID);
 
   const buildTx = async (): Promise<VersionedTransaction> => {

@@ -43,6 +43,17 @@ export function updateMintState(mint: PublicKey, partial: Partial<MintState>) {
   Object.assign(current, partial);
 }
 
+export function cleanupMintStateCache(activeMints: Set<string>): number {
+  let removed = 0;
+  for (const key of cache.keys()) {
+    if (!activeMints.has(key)) {
+      cache.delete(key);
+      removed++;
+    }
+  }
+  return removed;
+}
+
 export async function ensureAta(
   connection: Connection,
   mint: PublicKey,

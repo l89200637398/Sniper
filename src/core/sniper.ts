@@ -48,7 +48,7 @@ import { buyTokenLaunchLab, parseLaunchLabPool, PoolMigratedError } from '../tra
 import { buyTokenCpmm, parseCpmmPool, resolveCpmmPool } from '../trading/raydiumCpmm';
 import { buyTokenAmmV4, parseAmmV4Pool, resolveAmmV4Pool } from '../trading/raydiumAmmV4';
 import { RAYDIUM_LAUNCHLAB_PROGRAM_ID, RAYDIUM_CPMM_PROGRAM_ID, RAYDIUM_AMM_V4_PROGRAM_ID } from '../constants';
-import { updateMintState, getMintState, ensureAta } from './state-cache';
+import { updateMintState, getMintState, ensureAta, cleanupMintStateCache } from './state-cache';
 import { logger } from '../utils/logger';
 import { isTokenSafeCached } from '../utils/safety';
 import { checkSocialSignals, SocialSignal } from '../utils/social';
@@ -632,6 +632,7 @@ export class Sniper extends EventEmitter {
 
       const promise = (async () => {
         try {
+          this.ensureMintStateForSell(position.mint, position);
           const amountRaw = BigInt(Math.floor(position.amount * 10 ** position.tokenDecimals));
           const closedAt = Date.now();
 
@@ -641,7 +642,7 @@ export class Sniper extends EventEmitter {
             this.payer,
             amountRaw,
             getStrategyForProtocol(position.protocol).slippageBps,
-            false,
+            true,  // directRpc: shutdown приоритет — скорость
             position.feeRecipientUsed ? new PublicKey(position.feeRecipientUsed) : this.feeRecipient ?? undefined,
             position.protocol === 'mayhem',
             position.creator ? new PublicKey(position.creator) : undefined,
@@ -859,6 +860,7 @@ export class Sniper extends EventEmitter {
       return true;
     });
     if (!acquired) return;
+    this.ensureMintStateForSell(position.mint, position);
     try {
       const amountRaw = BigInt(Math.floor(position.amount * 10 ** position.tokenDecimals));
       const txId = await sellTokenAuto(
@@ -875,10 +877,13 @@ export class Sniper extends EventEmitter {
       );
       logger.info(`Stale position ${mintStr} closed, tx: ${txId}`);
       logEvent('STALE_CLOSE', { mint: mintStr, txId });
+      this.emitTradeClose(position, mintStr, txId, 'stale_close', false, 0, Date.now(), 'jito');
     } catch (err) {
       logger.error(`Failed to close stale position ${mintStr}:`, err);
+      this.failedSellMints.set(mintStr, Date.now());
     } finally {
       this.sellingMints.delete(mintStr);
+      this.seenMints.set(mintStr, Date.now());
     }
   }
 
@@ -1087,14 +1092,34 @@ export class Sniper extends EventEmitter {
       }
     }
 
+    // S1 FIX: cleanup unbounded Sets
+    for (const mint of Array.from(this.confirmedPositions)) {
+      if (!this.positions.has(mint)) this.confirmedPositions.delete(mint);
+    }
+    for (const mint of Array.from(this.createdATAs)) {
+      if (!this.positions.has(mint) && !this.pendingBuys.has(mint)) this.createdATAs.delete(mint);
+    }
+    for (const mint of Array.from(this.raydiumMigrateBlockedMints)) {
+      if (!this.positions.has(mint)) this.raydiumMigrateBlockedMints.delete(mint);
+    }
+
     // v3: очистка wallet tracker
     this.walletTracker.cleanup();
+
+    // state-cache: keep only mints that are active (positions, pending, seenMints)
+    const activeMints = new Set<string>([
+      ...this.positions.keys(),
+      ...this.pendingBuys.keys(),
+      ...this.seenMints.keys(),
+    ]);
+    const stateCachePurged = cleanupMintStateCache(activeMints);
 
     logger.debug(
       `cleanSeenMints: seenMints=${this.seenMints.size} recentBuys=${this.recentBuysForMint.size} ` +
       `confirmedBuyers=${this.confirmedRealBuyers.size} socialScore=${this.mintSocialScore.size} ` +
       `creatorSell=${this.creatorSellSeen.size} sellFails=${this.sellFailureCount.size} ` +
-      `walletHistory=${this.walletBuyHistory.size} trendTracked=${this.trendTracker.trackedCount}`
+      `walletHistory=${this.walletBuyHistory.size} trendTracked=${this.trendTracker.trackedCount}` +
+      `${stateCachePurged > 0 ? ` stateCachePurged=${stateCachePurged}` : ''}`
     );
   }
 
@@ -2690,7 +2715,9 @@ export class Sniper extends EventEmitter {
     // Last resort: check ATA balance directly
     try {
       const mintPubkey = new PublicKey(mintStr);
-      const ata = getAssociatedTokenAddressSync(mintPubkey, this.payer.publicKey, false, TOKEN_PROGRAM_ID);
+      const mintState = getMintState(mintPubkey);
+      const tokenProgram = mintState.tokenProgramId ?? TOKEN_PROGRAM_ID;
+      const ata = getAssociatedTokenAddressSync(mintPubkey, this.payer.publicKey, false, tokenProgram);
       const ataInfo = await withRpcLimit(() => this.connection.getTokenAccountBalance(ata));
       const balance = Number(ataInfo?.value?.uiAmount ?? 0);
       if (balance > 0) {
@@ -3364,6 +3391,17 @@ export class Sniper extends EventEmitter {
         logEvent('RUGCHECK_BLOCKED', { mint: token.mint, score: rugResult.score, risks: rugResult.risks, path: 'pumpswap_instant' });
         return;
       }
+
+      // S5 FIX: Token-2022 dangerous extensions check (was only in onTrendConfirmed)
+      try {
+        const t22 = await checkToken2022Extensions(this.connection, mintPubkey).catch(() => ({ isDangerous: false, extensions: [] }));
+        if (t22.isDangerous) {
+          logger.warn(`🛑 PumpSwap instant: Token-2022 dangerous extensions: ${t22.extensions.join(', ')}`);
+          logEvent('BUY_SKIPPED_TOKEN2022', { mint: token.mint, extensions: t22.extensions, path: 'pumpswap_instant' });
+          return;
+        }
+      } catch {}
+
 
       // ── CRITICAL: Проверка ликвидности пула перед instant entry ──
       // Из логов: 12/13 PumpSwap trades ушли в -100% за 1.2 сек, entry_price=0.0000021
@@ -6224,7 +6262,9 @@ export class Sniper extends EventEmitter {
               return;
             }
           }
-        } catch {}
+        } catch (lateErr: any) {
+          logger.debug(`Late-confirmed TX check failed for ${mintStr.slice(0,8)}: ${lateErr?.message ?? lateErr}`);
+        }
 
         // ── Jupiter sell fallback (brainstorm v4: pre-warmed) ────────────────
         // Jupiter находит маршрут через любой DEX, даже если пул мигрировал.
@@ -6255,7 +6295,9 @@ export class Sniper extends EventEmitter {
               if (txInfo?.meta && !txInfo.meta.err) {
                 solReceived = Math.max(0, ((txInfo.meta.postBalances[0] ?? 0) - (txInfo.meta.preBalances[0] ?? 0)) / 1e9);
               }
-            } catch {}
+            } catch (jupErr: any) {
+              logger.debug(`Jupiter sell TX read failed for ${mintStr.slice(0,8)}: ${jupErr?.message ?? jupErr}`);
+            }
 
             logger.info(`✅ Jupiter fallback sell SUCCESS for ${mintStr.slice(0,8)}, received ${solReceived.toFixed(6)} SOL`);
             logEvent('JUPITER_SELL_SUCCESS', { mint: mintStr, txId: jupTxId, solReceived });
@@ -6299,8 +6341,17 @@ export class Sniper extends EventEmitter {
               if (rescueTxId) {
                 logger.info(`🚑 Rescue sell succeeded for ${mintStr.slice(0,8)}: ${rescueTxId.slice(0,8)}`);
                 logEvent('RESCUE_SELL_OK', { mint: mintStr, txId: rescueTxId });
-                // Approximate SOL received (we can't know exact, but it's better than 0)
-                rescueSolReceived = position.entryAmountSol * 0.5; // conservative estimate
+                try {
+                  await new Promise(r => setTimeout(r, 2000));
+                  const rescueTxInfo = await withRpcLimit(() => this.connection.getTransaction(rescueTxId, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 }));
+                  if (rescueTxInfo?.meta && !rescueTxInfo.meta.err) {
+                    rescueSolReceived = Math.max(0, (rescueTxInfo.meta.postBalances[0] - rescueTxInfo.meta.preBalances[0]) / 1e9);
+                  } else {
+                    rescueSolReceived = position.entryAmountSol * 0.3;
+                  }
+                } catch {
+                  rescueSolReceived = position.entryAmountSol * 0.3;
+                }
               }
             }
           }
@@ -6834,7 +6885,7 @@ export class Sniper extends EventEmitter {
     const tipPerTx = config.jito.tipAmountSol;
     const txCount = 1 + position.partialSellsCount + 1;
     const protocolFeeRate = position.protocol === 'pumpswap' ? 0.0125 : 0.01;
-    const overheadSol = ataRent + tipPerTx * txCount + totalEntry * protocolFeeRate;
+    const overheadSol = ataRent + tipPerTx * txCount + totalEntry * protocolFeeRate + totalSolReceived * protocolFeeRate;
     const netPnlSol = pnlSol - overheadSol;
     const netPnlPercent = totalEntry > 0 ? (netPnlSol / totalEntry) * 100 : 0;
     const isCopyTrade = this.copyTradeMints.has(mintStr);

@@ -604,6 +604,8 @@ export async function buyTokenPumpSwap(
       SystemProgram.transfer({ fromPubkey: owner, toPubkey: wsolAta, lamports: solIn }),
       createSyncNativeInstruction(wsolAta),
       swapIx,
+      // Unwrap leftover wSOL from slippage → native SOL
+      createCloseAccountInstruction(wsolAta, owner, owner),
     ];
     const message = new TransactionMessage({
       payerKey: owner, recentBlockhash: blockhash, instructions,

@@ -85,6 +85,7 @@ export type CloseReason =
   | 'bundle_invalid_repeated' // 2+ Invalid bundles подряд — optimistic position удалена
   | 'empty_curve'       // sell вернул <0.001 SOL (curve дренирована)
   | 'ata_empty'         // ATA пуст после N failed sells (токены потеряны)
+  | 'stale_close'      // позиция закрыта при загрузке (too old)
   | 'early_exit'
   | 'dead_volume'
   | 'whale_sell'

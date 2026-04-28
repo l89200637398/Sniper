@@ -120,7 +120,7 @@ export const config = {
     maxPumpSwapPositions: 5,         // PumpSwap best +EV protocol (aggressive params)
     maxTotalExposureSol:  2.0,       // 3.5→2.0: conservative exposure, PumpSwap 0.14 + rest 0.05 each
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
-    minBalanceToTradeSol: 0,         // disabled: торгуем до нуля пока отлаживаем стратегию
+    minBalanceToTradeSol: 0.5,       // 0→0.5: аварийный пол, не торгуем на последние крохи
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
@@ -132,7 +132,7 @@ export const config = {
 
     // ── Серии убытков ────────────────────────────────────────────────────────
     // E: tighter loss control — pause 15 min after 3 consecutive losses
-    consecutiveLossesMax: 0,          // DISABLED: пауза после серии loss'ов отключена (мешает при cold start)
+    consecutiveLossesMax: 5,          // 0→5: пауза после 5 подряд loss'ов (защита от серии)
     pauseAfterLossesMs:   900_000,
 
     // ── Entry логика ─────────────────────────────────────────────────────────
@@ -172,7 +172,7 @@ export const config = {
 
     copyTrade: {
       enabled:              true,
-      entryAmountSol:       0.04,    // 0.06→0.04: conservative CT entry (0% WR)
+      entryAmountSol:       0,       // 0.04→0: CT disabled (0% WR, убыточен до отладки)
       tier2EntryAmountSol:  0,       // 0.04→0: T2 disabled (0% WR, -0.545 SOL drain)
       maxPositions:         2,        // 3→2: ограничиваем exposure пока CT не покажет +EV
       minBuySolFromTracked: 1.0,     // 0.5→1.0: только серьёзные покупки ≥1 SOL
@@ -190,8 +190,8 @@ export const config = {
       window:           10,    // минимум N сделок для оценки
       entryThreshold:   0.50,  // WR < 50% → включить defensive (was 45%)
       exitThreshold:    0.60,  // WR > 60% → выключить (was 55%)
-      scoreDelta:       4,     // minTokenScore += 4 (was 8, too aggressive — score ceiling ~55)
-      entryMultiplier:  0.70,  // entry × 0.70
+      scoreDelta:       8,     // 4→8: усиленный defensive (score ceiling ~55, при WR<50% блокирует больше)
+      entryMultiplier:  0.50,  // 0.70→0.50: при defensive mode entry вдвое меньше
     },
 
     // ── Entry momentum filter ────────────────────────────────────────────────
@@ -353,8 +353,8 @@ export const config = {
 
     // ── Pump.fun (bonding curve) ──────────────────────────────────────────────
     pumpFun: {
-      entryAmountSol:    0.05,               // 0.10→0.05: conservative — pump.fun risky, min exposure
-      minEntryAmountSol: 0.03,               // conservative min
+      entryAmountSol:    0.08,               // 0.05→0.08: breakeven WR 77%→58% при увеличенном entry (overhead ratio 7.4%→4.6%)
+      minEntryAmountSol: 0.05,               // 0.03→0.05: min поднят пропорционально
       minLiquiditySol:   0.04,
       slippageBps:       2000,               // E: 2500→2000: tighter slippage, rejects illiquid pools
       exit: {
@@ -417,7 +417,7 @@ export const config = {
         // EV-MODEL v4: PumpSwap best protocol, optimize for runners.
         // Portions sum 0.55 → 45% runner reserve. TP5 at 10x: full exit + re-enter trend monitoring.
         takeProfit: [
-          { levelPercent:   25, portion: 0.25 },  // TP1: cost recovery
+          { levelPercent:   18, portion: 0.25 },  // TP1: 25→18%, ранняя фиксация при overhead 4.4%
           { levelPercent:   80, portion: 0.15 },  // TP2: solid profit
           { levelPercent:  180, portion: 0.10 },  // TP3: strong move
           { levelPercent:  400, portion: 0.05 },  // TP4: big runner
@@ -584,10 +584,8 @@ export const config = {
         runnerTrailDrawdownPercent:    6,     // runner trailing
         runnerHardStopPercent:         12,    // runner hard stop
         takeProfit: [
-          { levelPercent:   3, portion: 0.30 },   // TP1: cost recovery at +3% (covers fees+slippage)
-          { levelPercent:   8, portion: 0.30 },   // TP2: solid profit at +8%
-          { levelPercent:  15, portion: 0.25 },   // TP3: strong move at +15%
-          { levelPercent:  30, portion: 0.10 },   // TP4: 5% runner remains
+          { levelPercent:   5, portion: 0.50 },   // TP1: 3→5%, 50% full exit (partial sells убыточны по overhead)
+          { levelPercent:  15, portion: 1.00 },   // TP2: 15% → sell ALL remaining (breakeven WR 91%→48%)
         ],
       },
     },
