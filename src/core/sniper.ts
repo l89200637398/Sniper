@@ -1196,6 +1196,19 @@ export class Sniper extends EventEmitter {
         if (cached.solReserve > 0n && cached.tokenReserve > 0n) {
           const position = this.positions.get(swapInfo.mint);
           if (position) {
+            // Liquidity drain detection: if reserves drop to dust, the pool is rugged.
+            // Don't update price (would produce fake PnL), immediately close as loss.
+            const solResSolCheck = safeNumber(cached.solReserve, 'solRes') / 1e9;
+            if (solResSolCheck < 0.001 && (Date.now() - position.openedAt) > 5_000) {
+              logger.warn(`🚨 LIQUIDITY DRAIN detected: ${swapInfo.mint.slice(0,8)} reserves=${solResSolCheck.toFixed(9)} SOL — closing as loss`);
+              logEvent('LIQUIDITY_DRAIN', { mint: swapInfo.mint, solReserve: solResSolCheck, protocol: 'pumpswap' });
+              this.positions.delete(swapInfo.mint);
+              this.seenMints.set(swapInfo.mint, Date.now());
+              this.emitTradeClose(position, swapInfo.mint, '', 'liquidity_drain' as CloseReason, false, 0, Date.now(), 'none');
+              await this.savePositions();
+              return;
+            }
+
             position.updatePrice(safeNumber(cached.solReserve, 'solRes'), safeNumber(cached.tokenReserve, 'tokenRes'));
             position.updateErrors = 0;
             if (this.trendTracker.isTracking(swapInfo.mint)) {
@@ -4509,6 +4522,7 @@ export class Sniper extends EventEmitter {
 
       if (config.trend.enabled) {
         this.trendTracker.track(mint, 'raydium-cpmm');
+        this.trendTokenData.set(mint, { mint, creator: '', bondingCurve: '', bondingCurveTokenAccount: '', signature: '', receivedAt: Date.now() } as any);
         logger.info(`🔄 Raydium CPMM RECOVERY${isScalp ? ' SCALP' : ''}: ${mint.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
         logEvent('RAYDIUM_CPMM_RECOVERY', { mint, pool: poolId.toBase58(), liquiditySol: solReserveSol, isScalp });
       }
@@ -4562,6 +4576,7 @@ export class Sniper extends EventEmitter {
 
       if (config.trend.enabled) {
         this.trendTracker.track(mintStr, 'raydium-ammv4');
+        this.trendTokenData.set(mintStr, { mint: mintStr, creator: '', bondingCurve: '', bondingCurveTokenAccount: '', signature: '', receivedAt: Date.now() } as any);
         logger.info(`🔄 Raydium AMM v4 RECOVERY${isScalp ? ' SCALP' : ''}: ${mintStr.slice(0, 8)} liq=${solReserveSol.toFixed(2)} SOL — trend tracking started`);
         logEvent('RAYDIUM_AMMV4_RECOVERY', { mint: mintStr, pool: poolStr, liquiditySol: solReserveSol, isScalp });
       }
