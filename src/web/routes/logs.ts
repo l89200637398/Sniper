@@ -227,7 +227,8 @@ async function performPush(): Promise<{ message: string; files: string[] }> {
   }
 
   // 8. git add -f + commit + push (4 attempts with exp. backoff)
-  await run(`git add -f "${EXPORT_DIR}"`);
+  // --all stages deletions of old raw files + additions of new chunks
+  await run(`git add -f --all -- "${EXPORT_DIR}"`);
 
   const commitMsg = `chore: incremental log export ${exportLabel}`;
   // Check if there is anything staged
