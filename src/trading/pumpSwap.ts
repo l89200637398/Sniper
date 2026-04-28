@@ -84,10 +84,10 @@ const POOL_ACCOUNT_DISCRIMINATOR = sha256('account:Pool').subarray(0, 8);
  * baseMint  = meme token
  * quoteMint = wSOL
  */
-export function getPoolPDA(tokenMint: PublicKey): PublicKey {
+export function getPoolPDA(tokenMint: PublicKey, index: number = 0): PublicKey {
   const creator = getPumpPoolAuthorityPDA(tokenMint);
   const idxBuf  = Buffer.alloc(2);
-  idxBuf.writeUInt16LE(0);
+  idxBuf.writeUInt16LE(index);
   return PublicKey.findProgramAddressSync(
     [Buffer.from('pool'), idxBuf, creator.toBuffer(), tokenMint.toBuffer(), WSOL_MINT.toBuffer()],
     PUMP_SWAP_PROGRAM,
@@ -425,22 +425,39 @@ export async function resolveSwapAccounts(
     poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(pool)));
   }
 
-  // 3. Попробовать PDA (работает для canonical pools)
+  // 3. Попробовать PDA indices 0,1,2 параллельно (canonical pools)
   if (!poolAcc) {
-    pool    = getPoolPDA(mint);
-    poolAcc = await withRetry(() => withRpcLimit(() => connection.getAccountInfo(pool)));
+    const pdaCandidates = [0, 1, 2].map(i => getPoolPDA(mint, i));
+    const pdaResults = await Promise.all(
+      pdaCandidates.map(pda => withRpcLimit(() => connection.getAccountInfo(pda)).catch(() => null))
+    );
+    for (let i = 0; i < pdaResults.length; i++) {
+      if (pdaResults[i] && pdaResults[i]!.data.length >= 301) {
+        pool    = pdaCandidates[i];
+        poolAcc = pdaResults[i];
+        if (i > 0) logger.info(`Pool found via PDA index=${i}: ${pool.toBase58()}`);
+        break;
+      }
+    }
   }
 
-  // 4. Fallback: getProgramAccounts — поиск пула по байтам mint-адреса
-  //    Ищем токен как baseMint (offset 43) и как quoteMint (offset 75)
+  // 4. Fallback: getProgramAccounts с таймаутом 10с
   if (!poolAcc) {
-    logger.debug(`Pool PDA not found for ${mint.toBase58()}, trying getProgramAccounts...`);
+    logger.warn(`Pool PDA (indices 0-2) not found for ${mint.toBase58()}, trying getProgramAccounts...`);
+    const GPA_TIMEOUT = 10_000;
     for (const offset of [43, 75]) {
       try {
-        const accounts = await connection.getProgramAccounts(PUMP_SWAP_PROGRAM, {
+        const gpaPromise = connection.getProgramAccounts(PUMP_SWAP_PROGRAM, {
           commitment: 'confirmed',
-          filters: [{ memcmp: { offset, bytes: mint.toBase58() } }],
+          filters: [
+            { dataSize: 301 },
+            { memcmp: { offset, bytes: mint.toBase58() } },
+          ],
         });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('getProgramAccounts timeout')), GPA_TIMEOUT)
+        );
+        const accounts = await Promise.race([gpaPromise, timeoutPromise]);
         if (accounts.length > 0) {
           pool    = accounts[0].pubkey;
           poolAcc = accounts[0].account;
@@ -451,6 +468,11 @@ export async function resolveSwapAccounts(
         logger.warn(`getProgramAccounts failed (offset ${offset}): ${e}`);
       }
     }
+  }
+
+  // Кэшировать найденный пул в MintState
+  if (poolAcc && !mintState.pool) {
+    updateMintState(mint, { pool: pool!, isPumpSwap: true });
   }
 
   if (!poolAcc) throw new Error(`PumpSwap pool not found for ${mint.toBase58()}`);

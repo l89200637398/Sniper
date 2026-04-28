@@ -21,7 +21,7 @@ import {
 import {
   buyTokenPumpSwap,
   sellTokenPumpSwap,
-  getPoolPDAByMint as getPoolPDA,
+  getPoolPDA,
   parsePoolAccount,
   getPoolAuthorityPDA,
 } from '../trading/pumpSwap';
@@ -2665,6 +2665,92 @@ export class Sniper extends EventEmitter {
     }
   }
 
+  /**
+   * Robust on-chain fallback: retry getSignatureStatuses up to 5 times (500ms apart)
+   * with 'processed' commitment to catch TXs that Jito falsely reports as Invalid.
+   */
+  private async checkTxLandedOnChain(txId: string, mintStr: string): Promise<boolean> {
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 500;
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      try {
+        const sigStatus = await withRpcLimit(() => this.connection.getSignatureStatuses([txId]));
+        const status = sigStatus?.value?.[0];
+        if (status && status.confirmationStatus && !status.err) {
+          logger.info(`🔄 Bundle "Invalid" but tx ${txId.slice(0,8)} LANDED on-chain (${status.confirmationStatus}) [retry ${i+1}]`);
+          logEvent('BUNDLE_INVALID_BUT_LANDED', { mint: mintStr, txId, confirmationStatus: status.confirmationStatus, retry: i+1 });
+          return true;
+        }
+      } catch (err) {
+        logger.debug(`On-chain fallback retry ${i+1} failed for ${mintStr}: ${err}`);
+      }
+      if (i < MAX_RETRIES - 1) await new Promise(r => setTimeout(r, RETRY_DELAY));
+    }
+
+    // Last resort: check ATA balance directly
+    try {
+      const mintPubkey = new PublicKey(mintStr);
+      const ata = getAssociatedTokenAddressSync(mintPubkey, this.payer.publicKey, false, TOKEN_PROGRAM_ID);
+      const ataInfo = await withRpcLimit(() => this.connection.getTokenAccountBalance(ata));
+      const balance = Number(ataInfo?.value?.uiAmount ?? 0);
+      if (balance > 0) {
+        logger.info(`🔄 ATA balance check: ${balance} tokens found for ${mintStr} — TX landed despite Invalid status`);
+        logEvent('BUNDLE_INVALID_BUT_ATA_HAS_TOKENS', { mint: mintStr, txId, balance });
+        return true;
+      }
+    } catch {
+      // ATA may not exist
+    }
+    return false;
+  }
+
+  /**
+   * Recover position after detecting a falsely-reported Invalid bundle.
+   */
+  private async recoverLandedPosition(
+    mintStr: string, txId: string, protocol: Position['protocol'], entryAmountSol: number, lastTipPaid: number,
+  ): Promise<boolean> {
+    updateLandedStat(true);
+    this.recordBundleResult(true);
+    try {
+      const txInfo = await withRpcLimit(() => this.connection.getTransaction(txId, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }));
+      const postBalance = txInfo?.meta?.postTokenBalances?.find(
+        (b: TokenBalance) => b.owner === this.payer.publicKey.toBase58() && b.mint === mintStr
+      );
+      if (postBalance) {
+        const actualAmount = Number(postBalance.uiTokenAmount.uiAmount ?? 0);
+        const decimals = postBalance.uiTokenAmount.decimals;
+        if (actualAmount > 0) {
+          const position = this.positions.get(mintStr);
+          if (position) {
+            const actualEntryPrice = entryAmountSol / actualAmount;
+            position.amount = actualAmount;
+            position.entryPrice = actualEntryPrice;
+            position.tokenDecimals = decimals;
+            await this.savePositions();
+            logger.info(`✅ Position confirmed (on-chain fallback) for ${mintStr}: ${actualAmount} tokens at ${actualEntryPrice}`);
+            this.confirmedPositions.add(mintStr);
+            const timeout = this.optimisticTimeouts.get(mintStr);
+            if (timeout) { clearTimeout(timeout); this.optimisticTimeouts.delete(mintStr); }
+            tradeLog.open({
+              mint: mintStr, protocol, entryPrice: actualEntryPrice,
+              amountSol: entryAmountSol, tokensReceived: actualAmount,
+              slippageBps: getStrategyForProtocol(protocol).slippageBps,
+              jitoTipSol: lastTipPaid, txId, openedAt: position.openedAt,
+            });
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      logger.warn(`recoverLandedPosition failed for ${mintStr}: ${err}`);
+    }
+    return false;
+  }
+
   private async confirmAndUpdatePosition(token: PumpToken, txId: string, sharedConfirmed?: { value: boolean }) {
     const maxAttempts = config.jito.maxRetries;
     const RESEND_FROM_ATTEMPT = 2;
@@ -2864,55 +2950,14 @@ export class Sniper extends EventEmitter {
             logEvent('BUNDLE_INVALID', { mint: token.mint, bundleId, attempt: attempt+1, txId, invalidCount });
             this.recordBundleResult(false);
             if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
-              // ── On-chain fallback: Jito status API may lie about "Invalid" ──
-              // Check if tx actually landed on-chain before removing position
-              try {
-                const sigStatus = await withRpcLimit(() => this.connection.getSignatureStatuses([txId]));
-                const status = sigStatus?.value?.[0];
-                if (status && status.confirmationStatus && !status.err) {
-                  logger.info(`🔄 Bundle "Invalid" but tx ${txId.slice(0,8)} LANDED on-chain (${status.confirmationStatus}) — treating as confirmed`);
-                  logEvent('BUNDLE_INVALID_BUT_LANDED', { mint: token.mint, txId, confirmationStatus: status.confirmationStatus });
-                  // Treat as Landed — fetch tx info and update position
-                  updateLandedStat(true);
-                  this.recordBundleResult(true);
-                  const txInfo = await withRpcLimit(() => this.connection.getTransaction(txId, {
-                    commitment: 'confirmed',
-                    maxSupportedTransactionVersion: 0,
-                  }));
-                  if (txInfo?.meta) {
-                    const postBalance = txInfo.meta.postTokenBalances?.find(
-                      (b: TokenBalance) => b.owner === this.payer.publicKey.toBase58() && b.mint === token.mint
-                    );
-                    if (postBalance) {
-                      const actualAmount = Number(postBalance.uiTokenAmount.uiAmount ?? 0);
-                      const decimals = postBalance.uiTokenAmount.decimals;
-                      if (actualAmount > 0) {
-                        const position = this.positions.get(token.mint);
-                        const pumpFunCfg = getStrategyForProtocol('pump.fun');
-                        if (position) {
-                          const actualEntryPrice = position.entryAmountSol / actualAmount;
-                          position.amount = actualAmount;
-                          position.entryPrice = actualEntryPrice;
-                          position.tokenDecimals = decimals;
-                          await this.savePositions();
-                          logger.info(`✅ Position confirmed (on-chain fallback) for ${token.mint}: ${actualAmount} tokens at ${actualEntryPrice}`);
-                          this.confirmedPositions.add(token.mint);
-                          const timeout = this.optimisticTimeouts.get(token.mint);
-                          if (timeout) { clearTimeout(timeout); this.optimisticTimeouts.delete(token.mint); }
-                          tradeLog.open({
-                            mint: token.mint, protocol: 'pump.fun', entryPrice: actualEntryPrice,
-                            amountSol: position.entryAmountSol, tokensReceived: actualAmount,
-                            slippageBps: pumpFunCfg.slippageBps, jitoTipSol: lastTipPaid, txId, openedAt: position.openedAt,
-                          });
-                          return;
-                        }
-                      }
-                    }
-                  }
-                  return; // tx landed but couldn't parse — don't remove position
-                }
-              } catch (err) {
-                logger.warn(`On-chain fallback check failed for ${token.mint}:`, err);
+              const landed = await this.checkTxLandedOnChain(txId, token.mint);
+              if (landed) {
+                const position = this.positions.get(token.mint);
+                const recovered = await this.recoverLandedPosition(
+                  token.mint, txId, 'pump.fun', position?.entryAmountSol ?? getStrategyForProtocol('pump.fun').entryAmountSol, lastTipPaid,
+                );
+                if (recovered) return;
+                return; // landed but couldn't parse — don't remove
               }
 
               logger.warn(`🗑️ ${invalidCount} Invalid bundles for ${token.mint} — removing optimistic position`);
@@ -3980,63 +4025,26 @@ export class Sniper extends EventEmitter {
             logEvent('BUNDLE_INVALID', { mint: mint.toBase58(), bundleId, attempt: attempt+1, txId, invalidCount });
             this.recordBundleResult(false);
             if (invalidCount >= MAX_INVALID_BEFORE_REMOVE) {
-              // ── On-chain fallback: Jito status API may lie about "Invalid" ──
               const mintStr = mint.toBase58();
-              try {
-                const sigStatus = await withRpcLimit(() => this.connection.getSignatureStatuses([txId]));
-                const status = sigStatus?.value?.[0];
-                if (status && status.confirmationStatus && !status.err) {
-                  logger.info(`🔄 PumpSwap Bundle "Invalid" but tx ${txId.slice(0,8)} LANDED on-chain (${status.confirmationStatus})`);
-                  logEvent('BUNDLE_INVALID_BUT_LANDED', { mint: mintStr, txId, confirmationStatus: status.confirmationStatus });
-                  updateLandedStat(true);
-                  this.recordBundleResult(true);
-                  const txInfoSwap = await withRpcLimit(() => this.connection.getTransaction(txId, {
-                    commitment: 'confirmed',
-                    maxSupportedTransactionVersion: 0,
-                  }));
-                  const postBalance = txInfoSwap?.meta?.postTokenBalances?.find(
-                    (b: TokenBalance) => b.owner === this.payer.publicKey.toBase58() && b.mint === mintStr
-                  );
-                  if (postBalance) {
-                    const actualAmount = Number(postBalance.uiTokenAmount.uiAmount ?? 0);
-                    const decimals = postBalance.uiTokenAmount.decimals;
-                    if (actualAmount > 0) {
-                      const pumpSwapCfg = getStrategyForProtocol('pumpswap');
-                      const entryPrice = pumpSwapCfg.entryAmountSol / actualAmount;
-                      const position = this.positions.get(mintStr);
-                      if (position) {
-                        position.amount = actualAmount;
-                        position.entryPrice = entryPrice;
-                        position.tokenDecimals = decimals;
-                        await this.savePositions();
-                        logger.info(`✅ PumpSwap position confirmed (on-chain fallback): ${actualAmount} tokens at ${entryPrice}`);
-                        this.confirmedPositions.add(mintStr);
-                        const timeout = this.optimisticTimeouts.get(mintStr);
-                        if (timeout) { clearTimeout(timeout); this.optimisticTimeouts.delete(mintStr); }
-                        tradeLog.open({
-                          mint: mintStr, protocol: 'pumpswap', entryPrice,
-                          amountSol: pumpSwapCfg.entryAmountSol, tokensReceived: actualAmount,
-                          slippageBps: pumpSwapCfg.slippageBps, jitoTipSol: lastTipPaid, txId, openedAt: position.openedAt,
-                        });
-                        return;
-                      }
-                    }
-                  }
-                  return;
-                }
-              } catch (err) {
-                logger.warn(`On-chain fallback check failed for PumpSwap ${mintStr}:`, err);
+              const landed = await this.checkTxLandedOnChain(txId, mintStr);
+              if (landed) {
+                const position = this.positions.get(mintStr);
+                const recovered = await this.recoverLandedPosition(
+                  mintStr, txId, 'pumpswap', position?.entryAmountSol ?? getStrategyForProtocol('pumpswap').entryAmountSol, lastTipPaid,
+                );
+                if (recovered) return;
+                return; // landed but couldn't parse — don't remove
               }
 
-              logger.warn(`🗑️ ${invalidCount} Invalid bundles for PumpSwap ${mint.toBase58()} — removing optimistic position`);
-              const position = this.positions.get(mint.toBase58());
+              logger.warn(`🗑️ ${invalidCount} Invalid bundles for PumpSwap ${mintStr} — removing optimistic position`);
+              const position = this.positions.get(mintStr);
               if (position) {
-                this.emitTradeClose(position, mint.toBase58(), txId, 'bundle_invalid_repeated', false, 0, Date.now(), 'jito');
-                this.positions.delete(mint.toBase58());
-                this.copyTradeMints.delete(mint.toBase58());
+                this.emitTradeClose(position, mintStr, txId, 'bundle_invalid_repeated', false, 0, Date.now(), 'jito');
+                this.positions.delete(mintStr);
+                this.copyTradeMints.delete(mintStr);
                 await this.savePositions();
               }
-              logEvent('PUMP_SWAP_BUY_FAIL', { mint: mint.toBase58(), txId, reason: `bundle_invalid_x${invalidCount}` });
+              logEvent('PUMP_SWAP_BUY_FAIL', { mint: mintStr, txId, reason: `bundle_invalid_x${invalidCount}` });
               return;
             }
           }
@@ -4182,9 +4190,18 @@ export class Sniper extends EventEmitter {
   private async recoverPumpSwapMint(mint: string): Promise<void> {
     try {
       const mintPubkey = new PublicKey(mint);
-      const poolAddr = getPoolPDA(mintPubkey);
-      const poolAcc = await withRpcLimit(() => this.connection.getAccountInfo(poolAddr));
-      if (!poolAcc || poolAcc.data.length < 301) return;
+      let poolAddr: PublicKey | undefined;
+      let poolAcc: import('@solana/web3.js').AccountInfo<Buffer> | null = null;
+      for (const idx of [0, 1, 2]) {
+        const candidate = getPoolPDA(mintPubkey, idx);
+        const acc = await withRpcLimit(() => this.connection.getAccountInfo(candidate)).catch(() => null);
+        if (acc && acc.data.length >= 301) {
+          poolAddr = candidate;
+          poolAcc = acc;
+          break;
+        }
+      }
+      if (!poolAcc || !poolAddr) return;
 
       const poolState = parsePoolAccount(poolAcc.data);
       const isMemeBase = poolState.baseMint.equals(mintPubkey);
