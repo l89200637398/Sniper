@@ -2737,6 +2737,11 @@ export class Sniper extends EventEmitter {
   private async recoverLandedPosition(
     mintStr: string, txId: string, protocol: Position['protocol'], entryAmountSol: number, lastTipPaid: number,
   ): Promise<boolean> {
+    // Guard: if another burst TX already recovered this position, skip
+    if (this.confirmedPositions.has(mintStr)) {
+      logger.warn(`recoverLandedPosition: ${mintStr.slice(0,8)} already confirmed by another burst TX, skipping duplicate`);
+      return true;
+    }
     updateLandedStat(true);
     this.recordBundleResult(true);
     try {
@@ -3972,6 +3977,8 @@ export class Sniper extends EventEmitter {
           logEvent('BUNDLE_STATUS', { mint: mint.toBase58(), bundleId, status: bundleStatus ?? 'undefined', txId });
 
           if (bundleStatus === 'Landed') {
+            if (this.confirmedPositions.has(mint.toBase58())) return;
+
             updateLandedStat(true);
             this.recordBundleResult(true);
 
