@@ -67,7 +67,7 @@ import { getActiveRpc } from '../infra/rpc';
 import { getRuntimeLayout } from '../runtime-layout';
 import { sellTokenJupiter, getJupiterQuote, sellTokenJupiterWithQuote } from '../trading/jupiter-sell';
 import { buyTokenJupiter } from '../trading/jupiter-buy';
-import { detectProtocol } from './detector';
+import { detectProtocol, type ProtocolType } from './detector';
 import { WalletTracker } from './wallet-tracker';
 import { SocialManager } from '../social/manager';
 import type { SocialSignal as PhaseSocialSignal } from '../social/models/signal';
@@ -5026,7 +5026,9 @@ export class Sniper extends EventEmitter {
     // Social discovery mint (нет tokenData) — определяем протокол и покупаем
     try {
       const mintPub = new PublicKey(mint);
-      const protocol = await detectProtocol(this.connection, mintPub);
+      const protocol = metrics.protocol !== 'unknown'
+        ? { protocol: metrics.protocol as ProtocolType }
+        : await detectProtocol(this.connection, mintPub);
 
       logger.info(
         `📈 TREND ENTRY (social discovery): ${mint.slice(0, 8)} ` +
@@ -5132,6 +5134,8 @@ export class Sniper extends EventEmitter {
       } else {
         logger.info(`[trend] Unknown protocol for social discovery ${mint.slice(0, 8)}: ${protocol.protocol}, skipping`);
         this.trackSkip('social_unknown_protocol'); logEvent('TREND_SKIP', { mint, reason: 'social_unknown_protocol', protocol: protocol.protocol });
+        this.trendTracker.remove(mint);
+        this.trendTokenData.delete(mint);
       }
     } catch (err) {
       logger.error(`[trend] Social discovery buy failed for ${mint}:`, err);
