@@ -80,7 +80,7 @@ import { checkRugcheck, startVerifiedCache } from '../utils/rugcheck';
 import { getTopHolderPct } from '../utils/holder-check';
 import { checkCreatorHistory } from '../utils/creator-history';
 import { getCreatorBalance } from '../utils/creator-balance';
-import { recordPoolSeen, shouldWaitForPool } from '../utils/pool-age-gate';
+import { recordPoolSeen, shouldWaitForPool, getPoolAgeMs } from '../utils/pool-age-gate';
 import { checkToken2022Extensions } from '../utils/token2022-check';
 import { analyzeMetadataQuality } from '../utils/metadata-quality';
 import { hasDexBoost, updateActiveBoosts } from '../utils/dex-boost-check';
@@ -4899,6 +4899,22 @@ export class Sniper extends EventEmitter {
             this.trackSkip('pumpswap_slots_full'); logEvent('TREND_SKIP', { mint, reason: 'pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
             return;
           }
+          // ── Suspicious reserve filter: young pool with abnormally high liquidity ──
+          const srCfg = (config.strategy as any).suspiciousReserve;
+          if (srCfg?.enabled) {
+            const mintState = getMintState(new PublicKey(mint));
+            const poolKey = mintState.pool?.toBase58();
+            if (poolKey) {
+              const poolAge = getPoolAgeMs(poolKey);
+              const cached = this.pumpSwapReserveCache.get(mint);
+              const solReserveSol = cached ? Number(cached.solReserve) / 1e9 : 0;
+              if (poolAge > 0 && poolAge < (srCfg.maxAgeMs ?? 10_000) && solReserveSol > (srCfg.maxReserveSol ?? 200)) {
+                logger.warn(`🚫 [trend] Suspicious reserve: ${mint.slice(0, 8)} — pool age ${poolAge}ms, reserves ${solReserveSol.toFixed(1)} SOL`);
+                this.trackSkip('suspicious_reserve'); logEvent('TREND_SKIP', { mint, reason: 'suspicious_reserve', protocol: 'pumpswap', poolAgeMs: poolAge, reserveSol: solReserveSol, threshold: srCfg.maxReserveSol ?? 200 });
+                return;
+              }
+            }
+          }
           const entryAmt = Math.max(psCfg.entryAmountSol * entryMultiplier, config.strategy.minEntryAmountSol);
           const mintPub = new PublicKey(mint);
           const txId = await buyTokenPumpSwap(this.connection, mintPub, this.payer, entryAmt, psCfg.slippageBps);
@@ -5022,6 +5038,22 @@ export class Sniper extends EventEmitter {
         if (this.pumpSwapCount >= config.strategy.maxPumpSwapPositions) {
           this.trackSkip('social_pumpswap_slots_full'); logEvent('TREND_SKIP', { mint, reason: 'social_pumpswap_slots_full', protocol: 'pumpswap', current: this.pumpSwapCount, max: config.strategy.maxPumpSwapPositions });
           return;
+        }
+        // ── Suspicious reserve filter (social path) ──
+        const srCfgSoc = (config.strategy as any).suspiciousReserve;
+        if (srCfgSoc?.enabled) {
+          const mintStateSoc = getMintState(mintPub);
+          const poolKeySoc = mintStateSoc.pool?.toBase58();
+          if (poolKeySoc) {
+            const poolAgeSoc = getPoolAgeMs(poolKeySoc);
+            const cachedSoc = this.pumpSwapReserveCache.get(mint);
+            const solResSoc = cachedSoc ? Number(cachedSoc.solReserve) / 1e9 : 0;
+            if (poolAgeSoc > 0 && poolAgeSoc < (srCfgSoc.maxAgeMs ?? 10_000) && solResSoc > (srCfgSoc.maxReserveSol ?? 200)) {
+              logger.warn(`🚫 [trend] Suspicious reserve (social): ${mint.slice(0, 8)} — pool age ${poolAgeSoc}ms, reserves ${solResSoc.toFixed(1)} SOL`);
+              this.trackSkip('social_suspicious_reserve'); logEvent('TREND_SKIP', { mint, reason: 'social_suspicious_reserve', protocol: 'pumpswap', poolAgeMs: poolAgeSoc, reserveSol: solResSoc, threshold: srCfgSoc.maxReserveSol ?? 200 });
+              return;
+            }
+          }
         }
         const psCfg = getStrategyForProtocol('pumpswap');
         const txId = await buyTokenPumpSwap(this.connection, mintPub, this.payer, psCfg.entryAmountSol, psCfg.slippageBps);

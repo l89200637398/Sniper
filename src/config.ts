@@ -286,6 +286,15 @@ export const config = {
       minVolumeSol:     0.3,        // unless volume already >0.3 SOL
     },
 
+    // ── #7b: Suspicious Reserve Filter ─────────────────────────────────────
+    // Young pool with abnormally high reserves = likely honeypot/rug setup.
+    // Normal pump.fun graduation ≈ 80 SOL; >200 SOL in <10s is a red flag.
+    suspiciousReserve: {
+      enabled:          true,
+      maxAgeMs:         10_000,       // pool younger than 10s
+      maxReserveSol:    200,          // with reserves > 200 SOL
+    },
+
     // ── #8: Token-2022 Extension Check ───────────────────────────────────────
     token2022Check: {
       enabled:          true,
