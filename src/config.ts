@@ -168,14 +168,14 @@ export const config = {
     // Tier 1 (conservative): WR≥60%, ≥15 trades → полный вход
     // Tier 2 (aggressive):   WR≥50%, ≥8 trades  → половина входа
     // Расширяем воронку: ранее 33 eligible, теперь ~100+ кошельков.
-    minCopyTradeScore: 30,          // 15→30: CT 0% WR, жёсткий фильтр до отладки
+    minCopyTradeScore: 40,          // 30→40: строгий фильтр по качеству токена
 
     copyTrade: {
       enabled:              true,
-      entryAmountSol:       0,       // 0.04→0: CT disabled (0% WR, убыточен до отладки)
-      tier2EntryAmountSol:  0,       // 0.04→0: T2 disabled (0% WR, -0.545 SOL drain)
-      maxPositions:         2,        // 3→2: ограничиваем exposure пока CT не покажет +EV
-      minBuySolFromTracked: 1.0,     // 0.5→1.0: только серьёзные покупки ≥1 SOL
+      entryAmountSol:       0.03,    // 0→0.03: re-enabled T1 с минимальным входом
+      tier2EntryAmountSol:  0,       // T2 остаётся выключен (0% WR)
+      maxPositions:         1,       // 2→1: максимум 1 CT позиция одновременно
+      minBuySolFromTracked: 1.5,     // 1.0→1.5: только крупные покупки ≥1.5 SOL
       slippageBps:          2000,
       reservedT1Slots:      1,
     },
@@ -707,12 +707,12 @@ export const config = {
   // Tier 1: WR≥60%, ≥15 trades → conservative, полный вход
   // Tier 2: WR≥50%, ≥8 trades  → aggressive, половина входа
   walletTracker: {
-    // Tier 1 (isCopyEligible)
-    minCompletedTrades:    15,          // 20→15: расширяем воронку
-    minWinRate:            0.60,        // 0.65→0.60: больше eligible кошельков
+    // Tier 1 (isCopyEligible) — ужесточено после 0% WR в проде
+    minCompletedTrades:    20,          // 15→20: требуем больше истории
+    minWinRate:            0.65,        // 0.60→0.65: только стабильно прибыльные
     // Tier 2 DISABLED (entry=0 SOL) — thresholds kept for future re-enable
-    tier2MinCompletedTrades: 15,     // 8→15: подтянули к T1 (T2 давал 0% WR)
-    tier2MinWinRate:         0.55,   // 0.50→0.55: требуем лучший WR
+    tier2MinCompletedTrades: 15,
+    tier2MinWinRate:         0.55,
     maxTrackedWallets:     2000,
     minCopyBuySolLamports: 150_000_000, // 0.15 SOL
     saveIntervalMs:        300_000,
