@@ -44,6 +44,7 @@ export interface EventCounts {
   entered: number;
   exited: number;
   skipped: number;
+  skipReasons?: Record<string, number>;
 }
 
 interface AppState {

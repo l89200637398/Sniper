@@ -24,6 +24,10 @@ function pnlSign(v: number): string {
   return v >= 0 ? '+' : '';
 }
 
+function humanizeReason(reason: string): string {
+  return reason.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // ── Push Logs Button ─────────────────────────────────────────────────────
 
 function PushLogsButton() {
@@ -63,38 +67,74 @@ function PushLogsButton() {
   );
 }
 
-// ── Event Counts Bar ─────────────────────────────────────────────────────
+// ── Event Counts Bar with Skip Breakdown ─────────────────────────────────
 
 const EventCountsBar = memo(function EventCountsBar() {
   const eventCounts = useStore(useShallow(s => s.eventCounts));
   const isRunning = useStore(s => s.status.isRunning);
+  const [expanded, setExpanded] = useState(false);
 
   if (!isRunning && eventCounts.detected === 0) return null;
 
+  const skipReasons = eventCounts.skipReasons ?? {};
+  const sortedReasons = Object.entries(skipReasons).sort((a, b) => b[1] - a[1]);
+  const maxCount = sortedReasons.length > 0 ? sortedReasons[0][1] : 0;
+  const hasReasons = sortedReasons.length > 0;
+
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-3 flex flex-wrap gap-4 text-sm">
-      <div>
-        <span className="text-zinc-500 mr-1.5">Detected</span>
-        <span className="font-mono text-white">{eventCounts.detected}</span>
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg">
+      <div className="p-3 flex flex-wrap gap-4 text-sm items-center">
+        <div>
+          <span className="text-zinc-500 mr-1.5">Detected</span>
+          <span className="font-mono text-white">{eventCounts.detected}</span>
+        </div>
+        <div>
+          <span className="text-zinc-500 mr-1.5">Entered</span>
+          <span className="font-mono text-green-400">{eventCounts.entered}</span>
+        </div>
+        <div>
+          <span className="text-zinc-500 mr-1.5">Exited</span>
+          <span className="font-mono text-yellow-400">{eventCounts.exited}</span>
+        </div>
+        <div
+          className={`${hasReasons ? 'cursor-pointer hover:bg-zinc-800 -m-1 p-1 rounded transition' : ''}`}
+          onClick={() => hasReasons && setExpanded(!expanded)}
+        >
+          <span className="text-zinc-500 mr-1.5">Skipped</span>
+          <span className="font-mono text-zinc-400">{eventCounts.skipped}</span>
+          {hasReasons && (
+            <span className="ml-1 text-zinc-600 text-xs">{expanded ? '▲' : '▼'}</span>
+          )}
+        </div>
+        {eventCounts.detected > 0 && (
+          <div className="ml-auto">
+            <span className="text-zinc-500 mr-1.5">Hit Rate</span>
+            <span className="font-mono text-blue-400">
+              {((eventCounts.entered / eventCounts.detected) * 100).toFixed(1)}%
+            </span>
+          </div>
+        )}
       </div>
-      <div>
-        <span className="text-zinc-500 mr-1.5">Entered</span>
-        <span className="font-mono text-green-400">{eventCounts.entered}</span>
-      </div>
-      <div>
-        <span className="text-zinc-500 mr-1.5">Exited</span>
-        <span className="font-mono text-yellow-400">{eventCounts.exited}</span>
-      </div>
-      <div>
-        <span className="text-zinc-500 mr-1.5">Skipped</span>
-        <span className="font-mono text-zinc-400">{eventCounts.skipped}</span>
-      </div>
-      {eventCounts.detected > 0 && (
-        <div className="ml-auto">
-          <span className="text-zinc-500 mr-1.5">Hit Rate</span>
-          <span className="font-mono text-blue-400">
-            {((eventCounts.entered / eventCounts.detected) * 100).toFixed(1)}%
-          </span>
+
+      {expanded && sortedReasons.length > 0 && (
+        <div className="border-t border-zinc-800 p-3 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
+          {sortedReasons.map(([reason, count]) => (
+            <div key={reason} className="flex items-center gap-2 text-xs">
+              <span className="text-zinc-500 w-44 truncate" title={reason}>
+                {humanizeReason(reason)}
+              </span>
+              <div className="flex-1 h-2 bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-zinc-600 rounded-full"
+                  style={{ width: `${(count / maxCount) * 100}%` }}
+                />
+              </div>
+              <span className="font-mono text-zinc-400 w-10 text-right">{count}</span>
+              <span className="text-zinc-600 w-10 text-right">
+                {eventCounts.skipped > 0 ? `${((count / eventCounts.skipped) * 100).toFixed(0)}%` : ''}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -121,13 +161,25 @@ const StatsCards = memo(function StatsCards() {
   const trendCount = useTrendStore(s => s.trackedCount);
   const exposure = useStore(s => s.exposure);
   const startBalance = useStore(s => s.startBalance);
+  const recentTrades = useStore(s => s.recentTrades);
 
   const posCount = Object.keys(positions).length;
   const winRate = stats.total ? ((stats.wins / stats.total) * 100) : 0;
   const sessionPnl = startBalance > 0 ? (balanceSol ?? 0) - startBalance : 0;
 
+  // Protocol breakdown from recent trades
+  const protocolStats: Record<string, { total: number; wins: number; pnlSol: number }> = {};
+  for (const t of recentTrades) {
+    const proto = t.protocol || 'unknown';
+    if (!protocolStats[proto]) protocolStats[proto] = { total: 0, wins: 0, pnlSol: 0 };
+    protocolStats[proto].total++;
+    if (t.pnlSol > 0) protocolStats[proto].wins++;
+    protocolStats[proto].pnlSol += t.pnlSol;
+  }
+  const protoEntries = Object.entries(protocolStats).sort((a, b) => b[1].total - a[1].total);
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3">
       {/* Balance + Start */}
       <div className="bg-zinc-900 rounded-xl p-4 space-y-2">
         <div>
@@ -182,6 +234,32 @@ const StatsCards = memo(function StatsCards() {
           {defensiveMode && <span className="text-[10px] text-yellow-400 font-semibold">DEFENSIVE</span>}
         </div>
       </div>
+
+      {/* Protocol Breakdown */}
+      <div className="bg-zinc-900 rounded-xl p-4 col-span-2 md:col-span-4 xl:col-span-1">
+        <div className="text-xs text-zinc-500 mb-2">By Protocol</div>
+        {protoEntries.length === 0 ? (
+          <div className="text-zinc-600 text-xs">No trades yet</div>
+        ) : (
+          <div className="space-y-1.5">
+            {protoEntries.map(([proto, s]) => {
+              const wr = s.total > 0 ? (s.wins / s.total) * 100 : 0;
+              return (
+                <div key={proto} className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-400 w-20 truncate">{proto}</span>
+                  <span className="font-mono text-zinc-500">{s.total}t</span>
+                  <span className={`font-mono w-10 text-right ${wr >= 50 ? 'text-green-400' : s.total > 0 ? 'text-red-400' : 'text-zinc-500'}`}>
+                    {s.total > 0 ? `${wr.toFixed(0)}%` : '-'}
+                  </span>
+                  <span className={`font-mono w-16 text-right ${pnlColor(s.pnlSol)}`}>
+                    {pnlSign(s.pnlSol)}{s.pnlSol.toFixed(3)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 });
@@ -195,7 +273,7 @@ const RecentTradesTable = memo(function RecentTradesTable() {
   return (
     <div>
       <h2 className="text-sm font-medium text-zinc-400 mb-3">Recent Trades ({recentTrades.length})</h2>
-      <div className="bg-zinc-900 rounded-xl overflow-hidden">
+      <div className="bg-zinc-900 rounded-xl overflow-hidden overflow-x-auto">
         <table className="w-full text-sm">
           <thead className="bg-zinc-800 text-zinc-400">
             <tr>
@@ -210,7 +288,7 @@ const RecentTradesTable = memo(function RecentTradesTable() {
             </tr>
           </thead>
           <tbody>
-            {recentTrades.slice(0, 20).map((t) => (
+            {recentTrades.slice(0, 30).map((t) => (
               <tr key={`${t.mint}-${t.timestamp}`} className="border-t border-zinc-800 hover:bg-zinc-800/30">
                 <td className="px-3 py-2 font-mono text-xs">
                   <a href={`https://solscan.io/token/${t.mint}`} target="_blank" rel="noreferrer"
@@ -284,7 +362,7 @@ export function Dashboard() {
         setStats({ total, wins, totalPnlSol });
         const store = useStore.getState();
         if (store.recentTrades.length === 0 && trades.length > 0) {
-          for (const t of trades.slice(0, 20).reverse()) {
+          for (const t of trades.slice(0, 30).reverse()) {
             store.addTrade({
               mint: t.mint ?? '',
               protocol: t.protocol ?? '',
@@ -342,7 +420,7 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Event Counts */}
+      {/* Event Counts with Skip Breakdown */}
       <EventCountsBar />
 
       {/* Stats Cards */}
