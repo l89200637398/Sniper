@@ -4661,9 +4661,13 @@ export class Sniper extends EventEmitter {
     if (this.sellingMints.has(mint)) { this.trackSkip('selling_in_progress'); logEvent('TREND_SKIP', { mint, reason: 'selling_in_progress' }); return; }
     if (this.failedSellMints.has(mint)) { this.trackSkip('failed_sell_blocked'); logEvent('TREND_SKIP', { mint, reason: 'failed_sell_blocked' }); return; }
 
-    // ── seenMints guard: не покупаем повторно токены, виденные в последний час ──
-    if (this.seenMints.has(mint) && !this.reEntryEligible.has(mint)) {
-      this.trackSkip('recently_seen'); logEvent('TREND_SKIP', { mint, reason: 'recently_seen' });
+    // ── Anti-rebuy: блокируем только если мы УЖЕ ПОКУПАЛИ этот токен ──
+    // seenMints помечает токен при первом обнаружении в geyser, задолго до покупки.
+    // Trend-confirmed entry по определению работает с "seen" токенами (сначала
+    // обнаружение, потом тренд 20-60с, потом покупка). Проверяем реальные покупки:
+    // pendingBuys, confirmedPositions — не дедупликационный seenMints.
+    if ((this.pendingBuys.has(mint) || this.confirmedPositions.has(mint)) && !this.reEntryEligible.has(mint)) {
+      this.trackSkip('already_bought'); logEvent('TREND_SKIP', { mint, reason: 'already_bought' });
       return;
     }
 

@@ -120,7 +120,7 @@ export const config = {
     maxPumpSwapPositions: 5,         // PumpSwap best +EV protocol (aggressive params)
     maxTotalExposureSol:  2.0,       // 3.5→2.0: conservative exposure, PumpSwap 0.14 + rest 0.05 each
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
-    minBalanceToTradeSol: 0.5,       // 0→0.5: аварийный пол, не торгуем на последние крохи
+    minBalanceToTradeSol: 0.2,       // 0.5→0.2: снижен — баланс 0.37 SOL блокировал все покупки
 
     // ── Фильтрация по возрасту токена ────────────────────────────────────────
     maxTokenAgeMs:        20_000,    // было 30000
