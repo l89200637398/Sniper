@@ -64,3 +64,4 @@ temp/
 # SQLite temp files
 *.db-shm
 *.db-wal
+data/last-log-export.json
