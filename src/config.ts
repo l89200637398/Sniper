@@ -115,10 +115,10 @@ export const config = {
 
   strategy: {
     // ── Лимиты ───────────────────────────────────────────────────────────────
-    maxPositions:         12,        // 10→12: +2 scalp slots for established pools
+    maxPositions:         14,        // 12→14: совпадает с суммой per-protocol лимитов (1+5+1+3+3+1)
     maxPumpFunPositions:  1,         // 2→1: risky bonding curve, только анонсированные токены
     maxPumpSwapPositions: 5,         // PumpSwap best +EV protocol (aggressive params)
-    maxTotalExposureSol:  2.0,       // 3.5→2.0: conservative exposure, PumpSwap 0.14 + rest 0.05 each
+    maxTotalExposureSol:  2.0,       // conservative exposure: PumpSwap 0.12×5 + остальные ~0.06–0.08 ≈ 1.14 SOL
     // F6: Auto-stop if wallet balance drops below this threshold (SOL)
     minBalanceToTradeSol: 0,         // отключен — раньше было 0, подтянулось из shadow
 
@@ -136,10 +136,12 @@ export const config = {
     pauseAfterLossesMs:   900_000,
 
     // ── Entry логика ─────────────────────────────────────────────────────────
-    // pumpSwapInstantEntry: FALSE — "Balanced Battle Config" из документов.
-    // Мгновенный вход в PumpSwap без подтверждения спроса = убыток.
-    // Ждём сигнал от independent buyer через waitForBuyerTimeoutMs.
-    pumpSwapInstantEntry:  true,     // false→true: включаем мгновенный вход PumpSwap (rug gate сохранён)
+    // pumpSwapInstantEntry: TRUE — мгновенный вход на новых PumpSwap пулах
+    // (миграции с bonding curve), без ожидания independent buyer.
+    // Защита: rug gate, suspicious-reserve filter, pool-age gate.
+    // На уже существующих CPMM/AMMv4 пулах работает другой путь —
+    // accumulation внешних buys ≥ minIndependentBuySol через TrendTracker.
+    pumpSwapInstantEntry:  true,
     creatorSellExit:       true,
     // EV-OPT (2026-04-23): min PnL drop (%) before creator_sell triggers exit.
     // Real data: 8/9 creator_sell exits fired at flat PnL (-2.53% to 0%) → panic loss.
@@ -164,10 +166,11 @@ export const config = {
     minTokenScore:     45,           // 60→45: снижен — реальный потолок score при входе ~55, порог 60 блокировал всё
     enableRugcheck:    true,
 
-    // ── Copy-Trade: 2-tier system (brainstorm v4) ──────────────────────────────
-    // Tier 1 (conservative): WR≥60%, ≥15 trades → полный вход
-    // Tier 2 (aggressive):   WR≥50%, ≥8 trades  → половина входа
-    // Расширяем воронку: ранее 33 eligible, теперь ~100+ кошельков.
+    // ── Copy-Trade: 2-tier system ──────────────────────────────────────────────
+    // Пороги задаются в `walletTracker` (см. внизу конфига):
+    //   Tier 1: WR ≥ 65%, ≥ 20 trades → полный вход (entryAmountSol)
+    //   Tier 2: WR ≥ 55%, ≥ 15 trades → половина входа (tier2EntryAmountSol)
+    // Tier 2 на текущий момент DISABLED (`tier2EntryAmountSol: 0`).
     minCopyTradeScore: 40,          // 30→40: строгий фильтр по качеству токена
 
     copyTrade: {
@@ -498,7 +501,7 @@ export const config = {
     },
 
     // ── Raydium CPMM (AMM) ───────────────────────────────────────────────
-    maxRaydiumCpmmPositions: 3,       // 2→3: +1 for scalp (established pools)
+    maxRaydiumCpmmPositions: 3,       // 2→3: общий лимит (scalp и обычные позиции делят слоты)
     raydiumCpmm: {
       entryAmountSol:        0.08,   // 0.05→0.08: лучший не-PS протокол (14.3% WR shadow), overhead ratio 6%→3.8%
       minEntryAmountSol:     0.05,   // 0.03→0.05: пропорционально
@@ -533,7 +536,7 @@ export const config = {
     },
 
     // ── Raydium AMM v4 (legacy) ──────────────────────────────────────────
-    maxRaydiumAmmV4Positions: 3,      // 1→3: established pools with scalping now included
+    maxRaydiumAmmV4Positions: 3,      // 1→3: общий лимит (scalp и обычные позиции делят слоты)
     raydiumAmmV4: {
       entryAmountSol:        0.06,   // 0.05→0.06: shadow 7% WR, trailing_stop winner +143%, минимальный рост для overhead
       minEntryAmountSol:     0.04,   // 0.03→0.04: пропорционально

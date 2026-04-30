@@ -350,7 +350,7 @@ Geyser gRPC stream → EventEmitter events
 - **GeyserClient** (`geyser/client.ts`): gRPC streaming with dual-queue (priority for CREATE events), backpressure, 64MB message limit
 - **Jito** (`jito/bundle.ts`): Dynamic tip from getTipFloor (1.5s cache TTL), burst with unique signatures via burstIndex, tip escalation 1.5x/retry, urgent uses maxTip immediately
 - **WalletTracker** (`core/wallet-tracker.ts`): 2-tier system. **T1 active**: WR≥65%, ≥20 completed trades, 0.03 SOL entry, max 1 position. **T2 disabled** (entry=0).
-- **TokenScorer** (`utils/token-scorer.ts`): v4 rule-based 0–100 with entry multiplier (≥70=2.0x, ≥50=1.0x, ≥minScore=0.5x); penalties for ZERO_SIGNALS, BOTH_AUTH, tiny metadata
+- **TokenScorer** (`utils/token-scorer.ts`): v4 rule-based 0–100 with entry multiplier (≥80=1.5x, ≥60=1.0x, ≥minScore=0.5x); penalties for ZERO_SIGNALS, BOTH_AUTH, tiny metadata
 - **TrendTracker** (`core/trend-tracker.ts`): EventEmitter aggregating buy/sell + social per mint into TrendMetrics (volume, ratio, acceleration). Emits `trend:confirmed/strengthening/weakening`. Drives Mode B entry.
 - **PreLaunchWatcher** (`core/prelaunch-watcher.ts`): Mode C — pending mint/ticker/creator candidates with 24h TTL; CREATE match forces score floor; auto-alpha from social pipeline (DexScreener boost + cross-source mentions + large channels)
 - **ShadowEngine** (`shadow/engine.ts`): Parallel sim with 3 profiles, mirrors live pipeline; dynamic slippage by constant-product formula; SCALP badge in UI
@@ -369,12 +369,12 @@ Geyser gRPC stream → EventEmitter events
 
 All trading parameters in `src/config.ts` (~775 lines). Highlights of current production config (April 2026, post-shadow-tuning on 1001 trades):
 
-**Position limits (12 total):**
+**Position limits (14 total):**
 - maxPumpFunPositions: 1 (risky bonding curve, only announced tokens)
 - maxPumpSwapPositions: 5 (best +EV protocol)
 - maxRaydiumLaunchPositions: 1
-- maxRaydiumCpmmPositions: 3 (+1 scalp slot)
-- maxRaydiumAmmV4Positions: 3 (+2 scalp slots)
+- maxRaydiumCpmmPositions: 3 (scalp и обычные позиции делят слоты)
+- maxRaydiumAmmV4Positions: 3 (scalp и обычные позиции делят слоты)
 - copyTrade.maxPositions: 1 (T1 only, 1 reservedT1Slot)
 - maxTotalExposureSol: 2.0 (was 3.5; conservative)
 
