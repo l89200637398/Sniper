@@ -1,0 +1,15 @@
+Export label: 2026-04-30T13-22-51Z
+Created at:   Thu Apr 30 13:25:50 UTC 2026
+Bot status:   stopped (graceful, DB consistent)
+Archive size: 68M
+Contents:
+  - logs/bot-2026-04-28..30.log
+  - logs/events-2026-04-28..30.log
+  - logs/nohup.log
+  - logs/sniper.log
+  - logs/trades.*.jsonl
+  - logs/export_transfer_*.csv (Solscan wallet exports)
+  - data/sniper.db (SQLite)
+
+Restore:
+  cat logs-export/chunk-* > restored.tar.gz && tar -xzvf restored.tar.gz
