@@ -1,6 +1,6 @@
 # TESTING.md — Тестирование Sniper Bot v3
 
-> Обновлено: 2026-04-19
+> Обновлено: 2026-04-30 (sync с commit `c894f31`)
 
 ## Подготовка
 
@@ -36,6 +36,24 @@ npx ts-node scripts/verify.ts
   - Slippage: 100–10000 bps
 
 **Ожидание:** `VERIFY COMPLETE — ALL CHECKS PASSED`, exit code 0.
+
+**Примечание по TP5:** `portion = 1.0` (PumpSwap combat mode) корректно обрабатывается — уровни с полным выходом исключаются из проверки суммы partial-portions (commit `821e9fe`).
+
+### 1.2 Sell-path validator (48 проверок)
+
+```bash
+npx ts-node scripts/verify-sell.ts
+```
+
+**Проверяет:**
+- Импорты всех 6 trading модулей
+- Routing sell-engine для каждого протокола
+- Position TP system (pending levels, partial reduces)
+- Slippage bounds (все 6 протоколов)
+- wSOL unwrap инструкции
+- Jupiter fallback регистрация
+
+**Ожидание:** `48/48 checks passed`, exit code 0.
 
 ---
 
@@ -233,14 +251,51 @@ npx ts-node scripts/recommend-config.ts --full
 
 ---
 
+## Часть 9: Shadow calibration
+
+```bash
+npm run shadow     # запускает 3 профиля (conservative/balanced/aggressive)
+```
+
+После ~200+ сделок в shadow:
+```bash
+curl http://localhost:3001/api/shadow/report
+```
+
+**Что смотреть:**
+- WR по протоколу → корректировать `entryAmountSol`
+- % stagnation exits → корректировать `stagnationWindowMs`
+- avg hold time vs timeStop → снижать `timeStopAfterMs` если > 80% exits по time-stop
+- EV per trade vs overhead → проверить что overhead < 5% entry
+
+---
+
+## Часть 10: EV-analysis pipeline
+
+```bash
+npx ts-node scripts/ev-simulation.ts            # 50k Monte Carlo
+npx ts-node scripts/monte-carlo.ts              # 100k × 5 протоколов
+npx ts-node scripts/ev-analysis/ev-model-v2.ts  # Калиброванная модель
+npx ts-node scripts/ev-analysis/grid-search.ts  # Grid: creatorSellMinDropPct × TP1 × SL
+npx ts-node scripts/ev-analysis/tp-reachability.ts  # P(достижения каждого TP)
+```
+
+**Ожидаемый вывод grid-search:**
+- Лучший breakeven WR при SL 8-15%, TP1 12-20%
+- creatorSellMinDropPct оптимум обычно 4-8%
+
+---
+
 ## Чек-лист: порядок тестирования
 
 ### Этап 1: Offline / Simulation
-- [ ] verify.ts passes (all checks)
+- [ ] `verify.ts` passes — `VERIFY COMPLETE — ALL CHECKS PASSED`
+- [ ] `verify-sell.ts` passes — `48/48 checks passed`
 - [ ] Raydium CPMM/AMM v4/LaunchLab simulation
 - [ ] PumpSwap simulation (standard + Token-2022)
 - [ ] Pump.fun simulation (SIMULATE=true)
-- [ ] Дискриминаторы совпадают
+- [ ] Дискриминаторы совпадают (Часть 7)
+- [ ] Shadow запустился, 3 профиля активны
 
 ### Этап 2: Buy+Sell (≥ 0.02 SOL)
 - [ ] PumpSwap buy+sell
@@ -250,15 +305,14 @@ npx ts-node scripts/recommend-config.ts --full
 - [ ] Pump.fun buy+sell
 
 ### Этап 3: Боевые тесты
-- [ ] ATA pre-check (пустой ATA → remove)
-- [ ] Force-close после 4 попыток
-- [ ] Circuit-breaker (2 identical errors → Jupiter)
-- [ ] Break-even after TP1
-- [ ] Kill-switch: 3 consecutive losses → pause 15 min
-- [ ] Defensive mode: WR < 40% → tighten
-- [ ] Balance check: < 0.5 SOL → skip
-- [ ] Copy-trade CT-2 (T1/T2 eligible)
-- [ ] SELL landing rate ≥ 90%
+- [ ] ATA pre-check (пустой ATA → remove position)
+- [ ] Force-close после 4 попыток (`FORCE_CLOSE: <mint>`)
+- [ ] Circuit-breaker (2 identical errors → Jupiter, `SELL_CIRCUIT_BREAK`)
+- [ ] Break-even after TP1 (стоп сдвинулся на 0%)
+- [ ] Kill-switch: 5 consecutive losses → pause 15 min
+- [ ] Defensive mode: WR < 50% → minScore+8, entry×0.50
+- [ ] Copy-trade CT-1 (T1 eligible: WR≥65%, ≥20 trades)
+- [ ] SELL landing rate ≥ 85%
 - [ ] Backup RPC failover (if BACKUP_RPC_URL set)
 - [ ] Sentinel silence (5 min no events)
 

@@ -1,7 +1,7 @@
 # Developer Handoff — Solana Sniper Bot v3
 
 > Подробный комментарий для разработчика, который подхватит проект.
-> Дата: 2026-04-07
+> Дата: 2026-04-30 (sync с commit `c894f31`, post-shadow 1001 trades)
 
 ---
 
@@ -19,15 +19,25 @@
 
 ### Подсистемы
 
-- **Geyser gRPC стриминг**: работает, подписки на все 6 программ (pump.fun, PumpSwap, Mayhem, LaunchLab, CPMM, AMM v4)
-- **Jito bundles**: работает, dynamic tips из getTipFloor, retry с escalation
-- **Token scoring**: работает, 0-100 баллов
-- **Safety checks**: работает (mint authority, freeze authority, rugcheck API)
-- **Copy-trade (2-tier)**: T1: WR≥60%/15+ trades → 0.06 SOL; T2: WR≥50%/8+ trades → 0.03 SOL; maxPositions=3
-- **Telegram бот**: работает, все команды
-- **Console control**: `scripts/control.ts` — запуск/остановка без Telegram
-- **Trade logging**: JSONL логи (events + trades)
-- **Graceful shutdown**: SIGINT/SIGTERM, 30s timeout
+- **Geyser gRPC стриминг**: работает, dual-queue (CREATE events — приоритет), 64MB message limit
+- **Jito bundles**: tip 0.0003 SOL (base), 0.001 max, 1.5x escalation/retry, burst 2 TX, cache TTL 1.5s
+- **Token scoring**: v4, 0-100 баллов + entry multiplier (2.0/1.0/0.5x), minScore 45
+- **Safety checks**: mint/freeze authority, Token-2022 dangerous extensions, rugcheck API
+- **Copy-trade T1**: WR≥65%, ≥20 trades → 0.03 SOL; **T2: DISABLED** (0% WR в проде)
+- **Три режима входа**: Mode A (elite score ≥25), Mode B (TrendTracker), Mode C (PreLaunchWatcher)
+- **Scalping mode**: CPMM/AMM v4 с >50 SOL reserve → 0.12 SOL, TP 5%/15%, tight SL 5%
+- **TP5 combat mode**: PumpSwap +1000% → полный выход, потом trend re-entry
+- **Shadow engine**: parallel backtester, 3 профиля, dynamic slippage formula
+- **Dossier**: per-mint SQLite история (seen→protocol→scoring→trade→close)
+- **PreLaunchWatcher**: 24h TTL, manual + auto-alpha (DexScreener/cross-source/large-channel)
+- **TrendTracker**: EventEmitter, rolling windows, emit trend:confirmed/strengthening/weakening
+- **Social pipeline**: DexScreener (60s) + Telegram HTML scraper (30s) + Twitter (opt-in)
+- **RuntimeConfig**: live overrides через Web UI, persisted в data/runtime-config.json
+- **Maintenance workers**: hourly cleanup + WR/ROI report; disk alerts 7 thresholds
+- **Telegram бот**: **read-only** (push + 4-кнопочное меню), НЕ принимает управляющих команд
+- **Web UI**: 11 страниц, 13 REST endpoints, Socket.IO, JWT auth
+- **Trade logging**: JSONL trades + events, SQLite (social_signals, dossier, analysis_reports)
+- **Graceful shutdown**: SIGINT/SIGTERM, 60s timeout (было 30s)
 
 ### Новые подсистемы (апрель 2026)
 
@@ -97,15 +107,20 @@
 - **Jito tip cache TTL** 10s→1.5s — tip floor может 10x за секунды при хайпе
 - **Jupiter timeout** 10s→2s — быстрый fallback при панике
 - **Detector cache** pump.fun 5s→1s — уменьшена слепая зона миграции
-- **Jito tips** tipAmountSol 0.00003→0.00005, minTip 0.000015→0.0001
+- **Jito tips** tipAmountSol 0.00003→0.0003, minTip 0.000015→0.0002, maxTip 0.00015→0.001
 - **TP race condition** — `pendingTpLevels` lockTpLevel/unlockTpLevel в position.ts
 
-### Что в процессе
+### Текущее состояние (апрель 2026)
 
-- Полное тестирование в реальном режиме (не SIMULATE)
-- Оптимизация exit-параметров на основе реальных данных
-- Мониторинг P&L через metrics endpoint
-- Web UI Dashboard — замена Telegram-бота (см. `WEBUI_SPEC.md`)
+Все основные модули завершены и готовы к production:
+- **Документация**: CLAUDE.md, PROJECT.md, STRATEGY.md, RUNBOOK.md, TESTING.md, WEBUI.md актуализированы
+- **Shadow calibration**: 1001+ shadow trades, per-protocol entry amounts скорректированы
+- **Web UI**: 11 страниц, Runtime Config, Push-to-Git
+
+**Приоритет дальнейшей работы:**
+1. Накопить 200+ боевых сделок → обновить EV-модель в STRATEGY.md
+2. Рассмотреть re-enable T2 copy-trade при улучшении WR
+3. Twitter парсер (RapidAPI) — активировать при получении ключа
 
 ### Поэтапный план: от 3 SOL к 15+ SOL/неделю
 

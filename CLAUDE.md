@@ -13,7 +13,9 @@
 
 ## What This Is
 
-A Solana MEV sniper bot targeting Pump.fun, PumpSwap, and Raydium (LaunchLab + CPMM + AMM v4) token launches. It streams real-time events via Yellowstone Geyser gRPC, executes buys through Jito MEV-Share bundles, manages positions with rule-based exits, and exposes three operator surfaces: a **read-only Telegram bot** (push notifications + 4-button status menu), a **CLI toolkit** under `scripts/`, and a **Web UI** (React + Vite) with Socket.IO.
+A Solana MEV sniper bot targeting Pump.fun, PumpSwap, and Raydium (LaunchLab + CPMM + AMM v4) token launches. It streams real-time events via Yellowstone Geyser gRPC, executes buys through Jito MEV-Share bundles, manages positions with rule-based exits (incl. **scalping mode** for high-liquidity pools and **TP5 +1000% combat mode**), and exposes three operator surfaces: a **read-only Telegram bot** (push notifications + 4-button status menu), a **CLI toolkit** under `scripts/` (incl. EV-analysis, dossier, prelaunch, shadow), and a **Web UI** (React + Vite, 13 REST endpoints + Socket.IO) with full operator dashboard.
+
+Three entry modes work in parallel: **Mode A** (elite-score immediate buy), **Mode B** (trend-confirmed via TrendTracker — volume/buyers/social) and **Mode C** (PreLaunchWatcher — manual + auto-alpha watchlist with TTL).
 
 ## Tech Stack
 
@@ -35,13 +37,16 @@ src/
 ├── constants.ts             # Solana program IDs, discriminators, layouts
 ├── runtime-layout.ts        # Dynamic on-chain layout caching
 ├── core/
-│   ├── sniper.ts            # Main Sniper class (EventEmitter: position:open/close)
-│   ├── position.ts          # Position tracking (PnL, exit signals, take-profit)
-│   ├── detector.ts          # Protocol detection (pump.fun vs PumpSwap)
+│   ├── sniper.ts            # Main Sniper class (~7700 lines, EventEmitter: position:open/close)
+│   ├── position.ts          # Position tracking (PnL, exit signals, take-profit, scalp flag)
+│   ├── detector.ts          # Protocol detection (pump.fun vs PumpSwap, LRU cache cleanup)
 │   ├── migration.ts         # Bonding curve → AMM migration detection
 │   ├── state-cache.ts       # MintState cache
 │   ├── wallet-tracker.ts    # Copy-trading wallet analysis
-│   └── sell-engine.ts       # Unified sell logic across protocols
+│   ├── sell-engine.ts       # Unified sell logic across protocols
+│   ├── blacklist-store.ts   # Atomic JSON persistence (tokens + creators), mtime-poll
+│   ├── prelaunch-watcher.ts # Mode C: pre-launch candidates (24h TTL, mint/creator match)
+│   └── trend-tracker.ts     # Mode B: real-time trend metrics + emit('trend:confirmed/weakening')
 ├── trading/
 │   ├── buy.ts               # Pump.fun buy instruction builder
 │   ├── sell.ts              # Pump.fun sell transaction
@@ -75,12 +80,25 @@ src/
 │   ├── token-scorer.ts      # v4 rule-based token scoring (0–100) with entry multiplier
 │   ├── social.ts            # LEGACY: pre-Phase-3 on-chain social check (used by token-scorer)
 │   ├── metrics.ts           # In-memory metrics: counters, gauges, histograms (optional /metrics HTTP)
-│   ├── rugcheck.ts          # Rug check API integration
-│   ├── safety.ts            # Token safety checks (mint/freeze authority)
+│   ├── rugcheck.ts          # Rug check API integration (relaxed for graduated PumpSwap)
+│   ├── safety.ts            # Token safety checks (mint/freeze auth + Token-2022 dangerous extensions)
 │   ├── balance.ts           # Balance validation
 │   ├── retry.ts             # Retry with exponential backoff
 │   ├── rpc-limiter.ts       # RPC rate limiting decorator
-│   └── sha.ts               # SHA256 utility
+│   ├── sha.ts               # SHA256 utility
+│   ├── bonding-curve-progress.ts  # %-of-curve gate (too early <2%, too late >85%)
+│   ├── bundled-buy-detector.ts    # Slot-bucketed buyer count (≥5 = bundled dev-buy)
+│   ├── creator-balance.ts         # Creator SOL balance (120s cache, <0.5 = -15)
+│   ├── creator-history.ts         # SQLite rug-rate by creator (5min cache, blocks repeat ruggers)
+│   ├── creator-wallet-age.ts      # First-tx slot estimate, isNew if <1h
+│   ├── dex-boost-check.ts         # DexScreener active boosts cache (1min)
+│   ├── holder-check.ts            # getTokenLargestAccounts top holder %
+│   ├── metadata-quality.ts        # Random/copycat name detection (-20..+5)
+│   ├── pool-age-gate.ts           # In-memory pool age (skip if <30s and <0.3 SOL volume)
+│   ├── price-stability.ts         # 10s window, panic-exit on drop >30% from peak
+│   ├── reserve-monitor.ts         # 30s SOL reserve snapshots, exit on >20% drop / liquidity drain
+│   ├── token2022-check.ts         # Blocks DANGEROUS extensions (TransferFee, PermanentDelegate, etc.)
+│   └── wash-trade-detector.ts     # 30s window repeat-buyer % (≥40% = wash flag)
 ├── social/                  # Phase 3: pluggable social-signal pipeline
 │   ├── models/signal.ts     # SocialSignal interface + signalKey() dedup
 │   ├── manager.ts           # SocialManager (polling, dedup, persist, emit)
@@ -93,12 +111,23 @@ src/
 │       └── twitter.ts       # RapidAPI-based search parser (STUB — gated on RAPIDAPI_KEY)
 ├── db/
 │   ├── sqlite.ts            # better-sqlite3 singleton + auto migrations
+│   ├── dossier.ts           # Per-mint history (seen → protocol → scoring → trade → close); replaces solscan
 │   └── migrations/*.sql     # Idempotent schema migrations
-├── web/                     # REST + Socket.IO backend for Web UI
-│   ├── server.ts            # Express app + static web-ui/dist
-│   ├── auth.ts              # JWT + bcrypt (STUB — gated on JWT_SECRET + WEB_PASSWORD_HASH)
-│   ├── routes/              # REST endpoints
-│   └── ws/                  # Socket.IO
+├── shadow/                  # Parallel backtester (3 profiles, mirrors live entry pipeline)
+│   ├── engine.ts            # ShadowEngine: portfolio sim, TradeLogEntry emit, ws integration
+│   ├── pipeline.ts          # Entry decision: limits → rugcheck/safety/social || → score
+│   ├── profiles.ts          # Conservative/balanced/aggressive (startBalance, entry, maxPositions)
+│   └── tx-builder.ts        # Unified buy/sell tx for all 5 protocols + simulation
+├── maintenance/             # Background workers
+│   ├── cleanup.ts           # Hourly TTL eviction + CleanupReport (saved to analysis_reports)
+│   └── disk-monitor.ts      # Free-space alerts at 10/8/6/4/3/2/1 GB (each fires once)
+├── web/                     # REST + Socket.IO backend for Web UI (13 routes)
+│   ├── server.ts            # Express 5 + JWT middleware + Socket.IO + static SPA
+│   ├── auth.ts              # JWT + bcrypt (gated on JWT_SECRET + WEB_PASSWORD_HASH)
+│   ├── routes/              # 13 REST endpoints (control, config, positions, trades,
+│   │                        #   wallet, wallets, blacklist, social, prelaunch, tokens,
+│   │                        #   logs, shadow, index)
+│   └── ws/events.ts         # Socket.IO: position:*, balance/stats (5s), trend:*, social:*
 ├── test-pumpswap.ts         # PumpSwap simulation test script (ops tool)
 ├── test-raydium.ts          # Raydium simulation test script (ops tool)
 └── autogen/
@@ -106,7 +135,7 @@ src/
 
 proto/                        # gRPC protocol buffer definitions
 scripts/
-├── verify.ts                # On-chain layout validation (prestart hook)
+├── verify.ts                # On-chain layout validation (prestart hook); handles TP5 portion=1.0
 ├── stop.ts                  # Graceful SIGTERM via .sniper.pid
 ├── control.ts               # Foreground launcher (no Telegram, no Web UI)
 ├── blacklist.ts             # Blacklist CLI (add/remove/list/stats/clear)
@@ -114,36 +143,62 @@ scripts/
 ├── analyze-trades.ts        # Post-trade JSONL analysis (+ social correlation)
 ├── recommend-config.ts      # Stage 3: config.ts advice (cron-friendly)
 ├── test-trade.ts            # Manual trade execution (auto-detects protocol)
-└── shadow-run.ts            # Shadow-mode replay (dev)
+├── shadow-run.ts            # Shadow-mode replay (parallel backtester)
+├── dossier.ts               # CLI viewer for per-mint full history (replaces solscan)
+├── prelaunch.ts             # CLI for PreLaunchWatcher (add/list/remove/clear)
+├── sell-unknown-tokens.ts   # Emergency mass-sell on wallet (+ burn unsellable)
+├── verify-sell.ts           # Pre-launch validator: imports + routing + TP system (48 checks)
+├── ev-simulation.ts         # 50k Monte Carlo with full exit logic
+├── monte-carlo.ts           # 100k trades × 5 protocols with traffic weights
+└── ev-analysis/             # 6 EV-tuning utilities
+    ├── ev-model-v2.ts       # Calibrated on real 18 trades; finds stable EV at WR≥30%
+    ├── aggregate-ev.ts      # 100k sim across 5 protocols, weighted EV
+    ├── grid-search.ts       # creatorSellMinDropPct × TP1 × SL grid stress-test
+    ├── per-protocol.ts      # Per-protocol breakdown (profit factor, distribution)
+    ├── final-comparison.ts  # Side-by-side comparison table
+    └── tp-reachability.ts   # Probability of reaching each TP level
 data/
 ├── positions.json           # Persisted active positions
 ├── blacklist.json           # Blacklist (tokens + creators); hot-reloaded via mtime poll
 ├── wallet-tracker.json      # Copy-trading wallet data
-└── sniper.db                # SQLite (social_signals, etc.)
+├── prelaunch.json           # PreLaunchWatcher candidates (24h TTL)
+├── runtime-config.json      # Web UI overrides (RuntimeConfig persistence)
+└── sniper.db                # SQLite (social_signals, events, trades, dossier, analysis_reports)
 web-ui/                       # Frontend (React + Vite) — served from web-ui/dist
+                             # Pages: Dashboard, Positions, Trades, Config, Blacklist,
+                             # Wallets, Social, PreLaunch, Tokens, Shadow, Logs
 ```
 
 ## Commands
 
 ```bash
 npm run dev       # Run with ts-node (development)
-npm run build     # Compile TypeScript → dist/
+npm run build     # tsc -p tsconfig.build.json + copy db/migrations → dist/
 npm start         # Run verify.ts prestart hook, then dist/index.js
+npm run shadow    # Parallel backtester (3 profiles)
+npm test          # jest --verbose (unit tests under __tests__/)
 ```
 
-There is no test runner (Jest/Vitest). Testing is done via:
-- `scripts/verify.ts` — validates on-chain account layouts before startup
-- `scripts/test-trade.ts` — manual trade execution (auto-detects pump.fun vs PumpSwap)
-- `src/test-pumpswap.ts` — PumpSwap-specific simulation test
-- `src/test-raydium.ts` — Raydium-specific simulation test
-- `scripts/analyze-trades.ts` — post-trade log analysis
-- `scripts/recommend-config.ts` — heuristic advice on config.ts
+Test/validation tooling:
+- `scripts/verify.ts` — validates on-chain account layouts + config consistency (handles TP5 portion=1.0 since 821e9fe)
+- `scripts/verify-sell.ts` — pre-launch sell-path validator (imports, sell-engine routing, TP system, 48 checks)
+- `scripts/test-trade.ts` — manual trade execution (auto-detects protocol)
+- `src/test-pumpswap.ts` / `src/test-raydium.ts` — protocol-specific simulation
+- `scripts/analyze-trades.ts` — post-trade JSONL + social correlation
+- `scripts/recommend-config.ts` — heuristic advice on config.ts (cron-friendly)
+- `scripts/shadow-run.ts` — parallel backtester (3 profiles, mirrors live pipeline)
+- `scripts/ev-simulation.ts` / `scripts/monte-carlo.ts` — synthetic EV projection
+- `scripts/ev-analysis/*.ts` — 6 EV calibration utilities
 
-Operator-facing CLI (see `PROJECT.md §3` / `RUNBOOK.md §A.5`):
+Operator CLI (see `RUNBOOK.md §4`):
 - `npm start` / `npm run stop` — prod lifecycle via `.sniper.pid`
-- `npm run blacklist -- <cmd>` — manage `data/blacklist.json` (hot-reloaded)
+- `npm run blacklist -- <cmd>` — manage `data/blacklist.json` (hot-reloaded via mtime)
 - `npm run cleanup-dust` — reclaim rent from empty ATAs
+- `npm run analyze` / `npm run recommend` — JSONL + config heuristics
 - `npx ts-node scripts/control.ts start` — foreground, no TG/Web UI
+- `npx ts-node scripts/dossier.ts <mint>` — full per-mint history from SQLite
+- `npx ts-node scripts/prelaunch.ts <add|list|remove|clear>` — PreLaunchWatcher CRUD
+- `npx ts-node scripts/sell-unknown-tokens.ts [--dry-run] [--burn-unsellable]` — emergency mass-sell
 
 ## Architecture
 
@@ -151,12 +206,30 @@ Operator-facing CLI (see `PROJECT.md §3` / `RUNBOOK.md §A.5`):
 
 ```
 Geyser gRPC stream → EventEmitter events
-  → Token scoring + safety checks
-  → Buy via Jito bundle (unknown protocol → Jupiter fallback)
-  → Position monitoring (PnL, exit signals, break-even after TP1)
-  → Sell: Jito → directRPC → bloXroute → Jupiter (4-chain fallback)
-  → Circuit-breaker: 2 identical sell errors → skip to Jupiter
-  → JSONL trade log + metrics (buy/sell latency histograms)
+  ├─► Mode A: elite score (≥eliteScoreThreshold=25) → immediate buy
+  ├─► Mode B: TrendTracker aggregates volume/buyers/social
+  │           → emit('trend:confirmed') → buy
+  └─► Mode C: PreLaunchWatcher match (manual + auto-alpha)
+              → forced score floor → buy
+  ↓
+  Token scoring + safety + filter gates (~13 utils: bundled-buy,
+    creator-history/age/balance, holder-check, pool-age, suspiciousReserve,
+    metadata-quality, token2022, curve-progress, dex-boost, wash-trade, etc.)
+  ↓
+  Buy via Jito bundle (burst 2 TXs; double-buy guarded by confirmedPositions Set)
+    └─► unknown protocol → Jupiter fallback (DISABLED by default)
+  ↓
+  Position monitoring (PnL, exit signals, BE after TP1, scalping mode for high-liq pools)
+    ├─► reserve-monitor: liquidity drain detection (solReserve <0.001 → close)
+    ├─► price-stability: panic exit on >30% drop from peak
+    └─► whale-sell: top-holder dump detection
+  ↓
+  Sell: Jito → directRPC → bloXroute → Jupiter (4-chain fallback + circuit-breaker)
+  ↓
+  Trend re-entry (PumpSwap + Raydium): if previous exit was profitable
+                                        and trend resumes → re-enter
+  ↓
+  JSONL trade log + dossier UPSERT + metrics + Socket.IO emit
 ```
 
 ### Protocols Supported
@@ -274,41 +347,107 @@ Geyser gRPC stream → EventEmitter events
 
 ### Key Subsystems
 
-- **GeyserClient** (`geyser/client.ts`): gRPC streaming with dual-queue (priority for CREATE events), backpressure handling, 64MB message limit
-- **Jito** (`jito/bundle.ts`): Dynamic tip calculation, burst with unique signatures via burstIndex, tip escalation 1.5x/retry
-- **WalletTracker** (`core/wallet-tracker.ts`): 2-tier copy-trading (T1: WR≥60%/15 trades, T2: WR≥50%/8 trades)
-- **TokenScorer** (`utils/token-scorer.ts`): v4 rule-based scoring (0–100) with entry multiplier (1.5x/1.0x/0.5x based on score); enhanced penalties for unverified tokens (ZERO_SIGNALS, BOTH_AUTH, tiny metadata)
-- **SellEngine** (`core/sell-engine.ts`): Unified sell across pump.fun/pumpswap/raydium, 4-chain fallback (Jito→directRPC→bloXroute→Jupiter), circuit-breaker after 2 identical errors, wSOL auto-unwrap
-- **Detector** (`core/detector.ts`): On-chain protocol detection with cache (permanent for terminal states, 5s TTL for pump.fun)
-- **Migration** (`core/migration.ts`): Bonding curve → PumpSwap detection; validates pool data ≥301 bytes (skips mid-migration)
-- **Raydium Auto-Routing**: LaunchLab buy catches `PoolMigratedError` and auto-routes to CPMM (migrateType=1) or AMM v4 (migrateType=0)
-- **Anti-Rebuy**: `seenMints` Map with 1h TTL refreshed on every position close — prevents duplicate entries
-- **JitoRateLimiter** (`infra/jito-rate-limiter.ts`): Token bucket rate limiter (10 RPS)
+- **GeyserClient** (`geyser/client.ts`): gRPC streaming with dual-queue (priority for CREATE events), backpressure, 64MB message limit
+- **Jito** (`jito/bundle.ts`): Dynamic tip from getTipFloor (1.5s cache TTL), burst with unique signatures via burstIndex, tip escalation 1.5x/retry, urgent uses maxTip immediately
+- **WalletTracker** (`core/wallet-tracker.ts`): 2-tier system. **T1 active**: WR≥65%, ≥20 completed trades, 0.03 SOL entry, max 1 position. **T2 disabled** (entry=0).
+- **TokenScorer** (`utils/token-scorer.ts`): v4 rule-based 0–100 with entry multiplier (≥70=2.0x, ≥50=1.0x, ≥minScore=0.5x); penalties for ZERO_SIGNALS, BOTH_AUTH, tiny metadata
+- **TrendTracker** (`core/trend-tracker.ts`): EventEmitter aggregating buy/sell + social per mint into TrendMetrics (volume, ratio, acceleration). Emits `trend:confirmed/strengthening/weakening`. Drives Mode B entry.
+- **PreLaunchWatcher** (`core/prelaunch-watcher.ts`): Mode C — pending mint/ticker/creator candidates with 24h TTL; CREATE match forces score floor; auto-alpha from social pipeline (DexScreener boost + cross-source mentions + large channels)
+- **ShadowEngine** (`shadow/engine.ts`): Parallel sim with 3 profiles, mirrors live pipeline; dynamic slippage by constant-product formula; SCALP badge in UI
+- **Maintenance** (`maintenance/cleanup.ts` + `disk-monitor.ts`): Hourly TTL eviction + WR/ROI report; disk alerts at 10/8/6/4/3/2/1 GB
+- **Dossier** (`db/dossier.ts`): Single-table per-mint history (seen → protocol → scoring → trade → close); replaces solscan
+- **SellEngine** (`core/sell-engine.ts`): Unified sell across pump.fun/pumpswap/raydium, 4-chain fallback (Jito→directRPC→bloXroute→Jupiter), circuit-breaker after 2 identical errors, wSOL auto-unwrap, Jupiter rescue at 50% slippage
+- **Detector** (`core/detector.ts`): On-chain protocol detection; permanent cache for terminal states, 1s TTL for pump.fun (was 5s)
+- **Migration** (`core/migration.ts`): Bonding curve → PumpSwap detection; validates pool data ≥301 bytes
+- **Raydium Auto-Routing**: LaunchLab buy catches `PoolMigratedError` → auto-routes to CPMM (migrateType=1) or AMM v4 (migrateType=0)
+- **Anti-Rebuy**: `pendingBuys` + `confirmedPositions` Sets (replaced `seenMints` since 1c0bd16 — `seenMints` was blocking 100% of TREND_CONFIRMED entries)
+- **Double-Buy Guard**: `confirmedPositions` checked in `recoverLandedPosition()` and PumpSwap Landed path (since dd906c3) — prevents burst-TX duplicates
+- **JitoRateLimiter** (`infra/jito-rate-limiter.ts`): Token bucket 10 RPS
 - **Backup RPC** (`infra/rpc.ts`): Auto-failover to `BACKUP_RPC_URL` on 429/timeout (30s cooldown)
 
 ## Configuration
 
-All trading parameters are in `src/config.ts`:
-- Max positions: 8 (3 pump.fun, 2 pumpswap, 2 raydium-launch, 2 raydium-cpmm, 2 raydium-ammv4, 3 copy-trade, 1 reserved T1 slot)
-- Entry amounts: 0.10 SOL default (pump.fun/pumpswap), 0.08 SOL (Raydium LaunchLab/CPMM/AMM v4), 0.06/0.03 SOL (copy T1/T2), 0.05 SOL (Jupiter fallback)
-- Take-profit: 4 tiered levels with 40% runner reserve (portions sum to 0.60)
-- Break-even stop after TP1: once first partial sell confirms, stop-loss moves to entry price
-- Jito tips: 0.00005 SOL base, 0.00015 max, 0.0001 min, 3 retries, 1.5x escalation, low-activity floor 0.00007
-- Compute budget: 200k CU limit, 50k microLamports/CU (~0.010 SOL/TX vs prev. 0.026)
-- Max total exposure: 1.5 SOL, min independent buy: 0.15 SOL
-- Stop-loss: 12% (pump.fun) / 15% (pumpswap) / 20% (Raydium); trailing drawdown: 7% / 10% / 12-18%
-- Early exit timeout: 5000ms (allows more time for momentum confirmation)
-- Balance floor: disabled (minBalanceToTradeSol=0)
-- Token scoring: minTokenScore=45, entry multiplier scales position size
-- Defensive mode: auto-tighten filters when rolling WR < 50% (minTokenScore +4, entry x0.70); consecutiveLossesMax=0 (pause disabled)
-- Loss pause: 15 min trigger configured but disabled by default to avoid cold-start blocking
-- Jupiter fallback buy: disabled by default (`jupiterFallback.enabled: false`)
+All trading parameters in `src/config.ts` (~775 lines). Highlights of current production config (April 2026, post-shadow-tuning on 1001 trades):
 
-Environment variables via `.env` (dotenv). Key optional vars:
-- `BACKUP_RPC_URL` — fallback RPC (auto-switches on 429/timeout)
-- `JUPITER_API_KEY` — optional for Jupiter paid tier
-- `RAPIDAPI_KEY` — enables Twitter social parser
-- `METRICS_ENABLED` — enables HTTP /metrics endpoint
+**Position limits (12 total):**
+- maxPumpFunPositions: 1 (risky bonding curve, only announced tokens)
+- maxPumpSwapPositions: 5 (best +EV protocol)
+- maxRaydiumLaunchPositions: 1
+- maxRaydiumCpmmPositions: 3 (+1 scalp slot)
+- maxRaydiumAmmV4Positions: 3 (+2 scalp slots)
+- copyTrade.maxPositions: 1 (T1 only, 1 reservedT1Slot)
+- maxTotalExposureSol: 2.0 (was 3.5; conservative)
+
+**Per-protocol entry amounts (shadow-data-driven):**
+- Pump.fun: 0.05 SOL (was 0.08; shadow 3% WR, mostly stagnation)
+- PumpSwap: 0.12 SOL (best +EV, aggressive)
+- Raydium CPMM: 0.08 SOL (14.3% shadow WR)
+- Raydium AMM v4: 0.06 SOL
+- Raydium LaunchLab: 0.04 SOL (lottery ticket; shadow 0% WR)
+- Copy-trade T1: 0.03 SOL (re-enabled with stricter filters)
+- Scalping mode: 0.12 SOL (high stake on established pools)
+- Jupiter fallback: 0.05 SOL (DISABLED by default)
+
+**Take-profit ladders (per-protocol; portions = % of CURRENT amount):**
+- Pump.fun: 12%/30, 60%/20, 200%/10, 500%/5 (35% runner)
+- PumpSwap: 18%/25, 80%/15, 180%/10, 400%/5, **1000%/100 (TP5 full exit)** — Combat mode
+- Raydium CPMM/LaunchLab: 20%/25, 70%/20, 200%/10, 500%/5 (40% runner)
+- Raydium AMM v4: 15%/30, 60%/20, 200%/10, 500%/5 (35% runner)
+- Scalping: 5%/50, 15%/100 (TP2 full exit; partial sells unprofitable on overhead)
+
+**Exit guards:**
+- Break-even stop after TP1 (only after partial confirms; `pendingTpLevels` race guard)
+- Stop-loss: 8% pump.fun / 15% PumpSwap / 12-15% Raydium / 5% scalp
+- Trailing: 7-10% normal, 22-30% in runner mode (after 60-100% PnL)
+- Velocity drop: 18-22% over 1.5-3s window (filters single-tick noise)
+- Time-stop: 75s pump.fun / 360s PumpSwap / 180-300s Raydium / 300s scalp
+- Stagnation: protocol-specific (45-180s window, 0.05-0.10 minMove)
+- Liquidity drain: solReserve <0.001 SOL → close as loss (since 7dcfb1b)
+- Whale-sell: top-holder dump >50% → instant exit
+- Suspicious reserve (PumpSwap): pool <10s + reserves >200 SOL → skip entry
+
+**Jito MEV (combat tips, not shadow):**
+- tipAmountSol: 0.0003, max 0.001, min 0.0002, 3 retries, 1.5x escalation
+- urgentMaxTipImmediate: true (dump signals skip ramp)
+- Burst count: 2 (with multipliers [1.0, 1.3])
+- Compute budget: 200k CU limit, 50k μlamports/CU; PumpSwap uses 300k
+
+**Trend (Mode B) thresholds:**
+- eliteScoreThreshold: 25 (Mode A immediate)
+- trackingScoreThreshold: 15
+- minUniqueBuyers: 4, minBuySellRatio: 2.0
+- Per-protocol minVolume: pump.fun 1.0 / PumpSwap 3.0 / CPMM 4.0 / AMM v4 5.0 / LaunchLab 2.0 SOL
+- Windows: pump.fun 60s, PumpSwap 120s, Raydium 300s
+- Auto-alpha: DexScreener boost OR ≥2 cross-source mentions in 10min OR large-channel positive (>5000 followers)
+
+**Trend re-entry (Mode B continuation):**
+- Enabled for `pumpswap`, `raydium-launch`, `raydium-cpmm`, `raydium-ammv4`
+- maxReEntries: 3, cooldownMs: 20_000, entryMultiplier: 0.5
+- Requires previous TP-profit exit (`requiresTpProfit: true`)
+
+**Defensive / kill-switches:**
+- consecutiveLossesMax: 5 → pause 15 min
+- defensive.entryThreshold WR<50% → minScore+8, entry×0.50
+- adaptiveScoring window 20: minScore bump per 5pp under target (max +15)
+- minBalanceToTradeSol: 0 (disabled — was blocking at 0.37 SOL)
+
+**Filter gates (all enabled by default):**
+poolAgeGate, suspiciousReserve, token2022Check, curveProgress (2-85%), metadataQuality, adaptiveEntryTiming (per-protocol minAge), buyAcceleration, dexBoostCheck (+15 score), bundledBuyDetection (-20 score), priceStability, reserveImbalance, creatorWalletAge (<1h penalty), creatorBalanceCheck (<0.5 SOL: -15)
+
+**Inactive (disabled but configured):**
+- Mayhem mode (`mayhem.enabled: false`) — EV simulation showed -0.003 SOL/trade
+- Jupiter fallback buy (`jupiterFallback.enabled: false`) — buys unknown protocols, lossy
+- Twitter parser (gated on `RAPIDAPI_KEY`) — disabled (unstable)
+- T2 copy-trade (`tier2EntryAmountSol: 0`) — kept for future re-enable
+
+**Environment variables (key optional):**
+- `BACKUP_RPC_URL` — fallback RPC (auto-switches on 429/timeout, 30s cooldown)
+- `JWT_SECRET` + `WEB_PASSWORD_HASH` — Web UI auth
+- `RAPIDAPI_KEY` — Twitter social parser
+- `BLOXROUTE_AUTH_HEADER` + `BLOXROUTE_TIP_WALLET` — sell fallback chain 3
+- `METRICS_ENABLED` (default `true`), `METRICS_PORT` (9469)
+- `TG_ALPHA_CHANNELS`, `ALPHA_TICKERS/MINTS/AUTHORS` — social watchlist
+- `SIMULATE=true` — dry-run (TXs not sent)
 
 ## Code Conventions
 
@@ -321,7 +460,7 @@ Environment variables via `.env` (dotenv). Key optional vars:
 - **Concurrency**: Use `p-limit` for bounded parallel operations (e.g., Jito queue at 20)
 - **Graceful shutdown**: SIGINT/SIGTERM handlers close all positions in parallel with 60s timeout
 
-## Implemented Safety & Resilience (April 2026)
+## Implemented Safety & Resilience (April 2026, post-shadow + 3-phase review)
 
 ### Transaction Safety
 - Jupiter TX validation: account keys checked (payer, inputMint, outputMint) before signing — prevents wallet drain via malicious API response
@@ -339,7 +478,14 @@ Environment variables via `.env` (dotenv). Key optional vars:
 - Break-even stop after TP1: `pendingTpLevels` protects against race condition during in-flight TP sell
 - Immediate `savePositions()` after every `reduceAmount()` — crash between partial sell and save no longer loses state
 - Migration detection validates pool data ≥301 bytes — prevents routing to uninitialized PumpSwap pool
-- Anti-rebuy: `seenMints` refreshed with `Date.now()` on every position close (8 locations) — 1h TTL prevents repeated entry
+- **Anti-rebuy fix (1c0bd16)**: replaced `seenMints` (was blocking 100% TREND_CONFIRMED entries) with `pendingBuys` + `confirmedPositions` — only real purchases mark mint as taken
+- **Double-buy guard (dd906c3)**: burst TXs can both land despite Jito Invalid; `confirmedPositions` Set in `recoverLandedPosition()` and PumpSwap Landed path prevents duplicate positions
+- **Bundle_invalid recovery (9bb6518)**: `checkTxLandedOnChain()` 5x retry with `getSignatureStatuses` + ATA balance fallback; `recoverLandedPosition()` unified for pump.fun/PumpSwap
+- **Raydium recovery (7dcfb1b)**: RECOVERY path sets trendTokenData (else `onTrendConfirmed` would skip)
+- **Liquidity drain detection (7dcfb1b)**: solReserve <0.001 SOL after 5s → close as loss
+- **Suspicious reserve filter (b602aa8)**: PumpSwap pool <10s with >200 SOL reserves → skip entry (honeypot/rug indicator)
+- **Token-2022 dangerous extensions**: blocks TransferFee, PermanentDelegate, TransferHook, ConfidentialTransfer, DefaultAccountState
+- **TP5 verify.ts (821e9fe)**: portion=1.0 (full exit) handled correctly — partial portions checked separately, full exits excluded from sum check
 
 ### Raydium Migration Handling
 - `PoolMigratedError` thrown when LaunchLab pool status ≥ 250 (graduated)
@@ -394,11 +540,69 @@ DexScreener and Telegram (public-channel scraper) work out of the box without an
 - **Alpha**: populate ALPHA_TICKERS / ALPHA_MINTS / ALPHA_AUTHORS
 - **TG channel override**: set `TG_ALPHA_CHANNELS` to override `DEFAULT_CHANNELS` in `src/social/parsers/telegram.ts`
 
+## Trend / PreLaunch / Shadow / Maintenance Subsystems (April 2026)
+
+### TrendTracker (Mode B)
+
+`src/core/trend-tracker.ts` — EventEmitter aggregating gRPC buy/sell events + social signals into per-mint TrendMetrics. Drives **Mode B entry** (`onTrendConfirmed`) for tokens that did not pass the elite-score immediate-buy gate.
+
+Metrics computed per mint over rolling window (60-300s by protocol):
+- `uniqueBuyers`, `buyVolumeSol`, `sellVolumeSol`, `buySellRatio`
+- `acceleration` (buys/sec change-over-change)
+- `socialMentions` (cross-source dedup count)
+
+Confirms when ALL of: `uniqueBuyers ≥ minUniqueBuyers (4)`, `buyVolumeSol ≥ protocol-specific threshold`, `buySellRatio ≥ 2.0`, `buyAccelerationGate` (rate increasing). Emits `trend:confirmed` → Sniper.handleTrendConfirmed → buy. Also emits `trend:strengthening` (add-on signal) and `trend:weakening` (`weakenSellRatio: 1.5`, `weakenWindowMs: 20s` → exit signal).
+
+Auto-cleanup: `inactiveCleanupMs: 300_000` removes silent mints.
+
+### PreLaunchWatcher (Mode C)
+
+`src/core/prelaunch-watcher.ts` + `data/prelaunch.json` — list of awaited tokens (mint/ticker/creator). On CREATE event, match → forced score floor (bypasses minTokenScore). 24h TTL with periodic cleanup.
+
+**Auto-alpha population** from social pipeline (3 disjunctive criteria, configurable in `trend.autoAlpha`):
+1. DexScreener boost → automatic alpha
+2. Cross-source: `≥minMentions (2)` distinct sources mentioning same mint within `lookbackMs (10min)`
+3. Large channel: `≥minFollowers (5000)` + sentiment ≥ `positiveSentimentMin (0.2)`
+
+Auto-alpha entries get shorter TTL (1h vs 24h for manual). Surface: `/api/prelaunch` REST + `/prelaunch` Web UI page + `scripts/prelaunch.ts` CLI.
+
+### Shadow Engine (Backtester)
+
+`src/shadow/` — parallel simulation that mirrors live entry pipeline. Three profiles (conservative/balanced/aggressive) with own startBalance/entry/maxPositions. Used to calibrate per-protocol entry amounts and exit parameters.
+
+Components:
+- `engine.ts` — ShadowEngine: portfolio state, monitors mints, runs entry pipeline, manages positions, emits `TradeLogEntry` (with `isScalp` flag → cyan SCALP badge in UI)
+- `pipeline.ts` — full entry decision: limits → rugcheck/safety/social parallel → skip gate → scoring (informational only — does not actually buy)
+- `profiles.ts` — `PROFILES` constants
+- `tx-builder.ts` — unified buy/sell tx for all 5 protocols + `simulateTx()`. **Dynamic slippage** by constant-product formula (since 972b23e): for 0.1 SOL into 50 SOL pool ≈60 bps vs previous fixed 1000 bps
+
+Surface: `npm run shadow` + `/api/shadow/{status,trades,report,stop}` + `/shadow` Web UI.
+
+### Maintenance Workers
+
+`src/maintenance/` — autonomous background tasks started from `index.ts`:
+- **cleanup.ts** (1h interval): TTL eviction of stale events/token_metadata/logs; generates `CleanupReport` (WR, ROI, recommendations) saved to `analysis_reports` table; sends Telegram summary
+- **disk-monitor.ts** (5min interval): alerts when free disk space drops below 10/8/6/4/3/2/1 GB; each threshold fires once until recovery; Telegram notify
+
+### Production Dashboard (Web UI /)
+
+Backend (`src/core/sniper.ts` + `src/web/ws/events.ts`):
+- `trackSkip()` aggregates skip-reason counters
+- Getters: `getEventCounts()`, `getExposure()`, `getStartBalance()`
+- WebSocket emit every 5s + on snapshot
+
+Frontend:
+- `EventCountsBar` (detected/entered/exited/skipped + hit-rate)
+- `StatsCards` (Balance, Positions, WinRate, PnL, per-protocol breakdown)
+- Skip-reasons bar chart with %
+- `RecentTradesTable` (30 rows)
+- **Push Logs to Git** button (POST /api/logs/push-to-git, 49MB chunks, mutex-protected)
+
 ## Future Development Proposals
 
-Two proposal documents exist in the repo root:
-- **"Внедрение ИИ в проект.docx"** — ML/AI integration roadmap (dynamic scoring, predictive exits, regime detection, copy-trade 2.0)
-- **"Реализация скальпинга на DEX.docx"** — DEX scalping module proposal (grid/momentum/RSI strategies, technical analysis, separate from sniper logic)
+Two proposal documents exist in repo root:
+- **"Внедрение ИИ в проект.docx"** — ML/AI integration roadmap (dynamic scoring, predictive exits, regime detection, copy-trade 2.0). NOT IMPLEMENTED.
+- **"Реализация скальпинга на DEX.docx"** — DEX scalping module proposal. **PARTIALLY IMPLEMENTED** as `scalping` config section (CPMM/AMM v4 high-liquidity pools, see commits `a9b49e2`, `3fc8d25`, `f5cb84e`).
 
 ## TX Diagnostic Logging (April 2026)
 
@@ -483,11 +687,14 @@ npm run stop                                              # Graceful stop
 
 ## Important Notes
 
-- The `scripts/verify.ts` prestart hook must pass before production startup — it validates on-chain account layouts match expectations
+- The `scripts/verify.ts` prestart hook must pass before production startup — validates on-chain layouts + config consistency (TP portion sums, position limits, exit params, slippage bounds)
 - `data/positions.json` persists across restarts; do not delete while positions are open
-- Jito tip amounts are critical for execution speed — too low = missed trades, too high = wasted SOL
-- Copy-trading is enabled by default (`copyTrade.enabled: true`) with 2-tier system
-- Documentation exists in DOCX format (English + Russian) in the repo root
+- Jito tip amounts are critical for execution speed — current production tip is 0.0003 SOL (was 0.00005), max 0.001 — calibrated for >30% landing rate
+- **Copy-trading**: T1 ENABLED (WR≥65%, ≥20 trades, 0.03 SOL); T2 DISABLED (entry=0)
+- **Mayhem mode**: DISABLED (negative EV)
+- **Twitter parser**: DISABLED (unstable)
+- **Jupiter fallback buy**: DISABLED (lossy on unknown protocols); Jupiter still used as last-resort SELL chain
+- Documentation exists in DOCX format (Russian) in repo root: see "Future Development Proposals" section
 - Official PumpSwap SDK reference: `@pump-fun/pump-swap-sdk` v1.14.1 (npm)
-- Twitter social parser: `twitter-api45.p.rapidapi.com` (free tier ~500 req/month, requires `RAPIDAPI_KEY`)
-- Telegram DEFAULT_CHANNELS (12 каналов): protocol-agnostic coverage of pump.fun, PumpSwap, Raydium, общий Solana alpha
+- Telegram DEFAULT_CHANNELS (12 каналов): protocol-agnostic coverage of pump.fun, PumpSwap, Raydium, общий Solana alpha (see `src/social/parsers/telegram.ts`)
+- Web UI auth: bcrypt + JWT in httpOnly cookie. Generate hash: `node -e 'require("bcrypt").hash(process.argv[1],10).then(console.log)' 'PASSWORD'`
