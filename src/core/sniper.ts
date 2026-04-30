@@ -4907,7 +4907,14 @@ export class Sniper extends EventEmitter {
             if (poolKey) {
               const poolAge = getPoolAgeMs(poolKey);
               const cached = this.pumpSwapReserveCache.get(mint);
-              const solReserveSol = cached ? Number(cached.solReserve) / 1e9 : 0;
+              let solReserveSol = cached ? Number(cached.solReserve) / 1e9 : 0;
+              // Fallback: cache может быть пуст для самых молодых пулов — читаем on-chain.
+              if (solReserveSol === 0 && mintState.poolQuoteTokenAccount) {
+                try {
+                  const qa = await withRpcLimit(() => this.connection.getTokenAccountBalance(mintState.poolQuoteTokenAccount!));
+                  solReserveSol = Number(qa?.value?.uiAmount ?? 0);
+                } catch { /* ignore — оставляем 0, фильтр пропустит */ }
+              }
               if (poolAge > 0 && poolAge < (srCfg.maxAgeMs ?? 10_000) && solReserveSol > (srCfg.maxReserveSol ?? 200)) {
                 logger.warn(`🚫 [trend] Suspicious reserve: ${mint.slice(0, 8)} — pool age ${poolAge}ms, reserves ${solReserveSol.toFixed(1)} SOL`);
                 this.trackSkip('suspicious_reserve'); logEvent('TREND_SKIP', { mint, reason: 'suspicious_reserve', protocol: 'pumpswap', poolAgeMs: poolAge, reserveSol: solReserveSol, threshold: srCfg.maxReserveSol ?? 200 });
@@ -4915,6 +4922,39 @@ export class Sniper extends EventEmitter {
               }
             }
           }
+
+          // ── Imbalanced ratio check (honeypot detection) ──
+          // Те же пороги что на instant-entry: token/SOL ratio > 1M = подменённые резервы.
+          // pTkKEe9E (28 апреля) показал PnL +700M% сразу после buy — фильтр на instant-entry
+          // его бы заблокировал, но trend-entry path этой проверки не имел.
+          try {
+            const mintStateForRatio = getMintState(new PublicKey(mint));
+            if (mintStateForRatio.poolBaseTokenAccount && mintStateForRatio.poolQuoteTokenAccount) {
+              const [baseAcc, quoteAcc] = await Promise.all([
+                withRpcLimit(() => this.connection.getTokenAccountBalance(mintStateForRatio.poolBaseTokenAccount!)),
+                withRpcLimit(() => this.connection.getTokenAccountBalance(mintStateForRatio.poolQuoteTokenAccount!)),
+              ]);
+              const quoteReserveSol = Number(quoteAcc?.value?.uiAmount ?? 0);
+              const baseReserve = Number(baseAcc?.value?.uiAmount ?? 0);
+              const ratio = baseReserve > 0 && quoteReserveSol > 0 ? baseReserve / quoteReserveSol : Infinity;
+              const minLiq = config.strategy.pumpSwap.minLiquiditySol;
+              if (quoteReserveSol < minLiq) {
+                logger.warn(`🚫 [trend] PumpSwap: pool SOL reserve ${quoteReserveSol.toFixed(3)} < ${minLiq} min`);
+                this.trackSkip('low_liquidity'); logEvent('TREND_SKIP', { mint, reason: 'low_liquidity', quoteReserveSol, baseReserve });
+                return;
+              }
+              if (ratio > 1_000_000) {
+                logger.warn(`🚫 [trend] PumpSwap: imbalanced pool ratio ${ratio.toFixed(0)} — likely honeypot`);
+                this.trackSkip('honeypot_ratio'); logEvent('TREND_SKIP', { mint, reason: 'honeypot_ratio', quoteReserveSol, baseReserve, ratio });
+                return;
+              }
+            }
+          } catch (e) {
+            logger.warn(`[trend] PumpSwap reserve check failed for ${mint.slice(0, 8)}: ${e}`);
+            this.trackSkip('reserve_check_failed'); logEvent('TREND_SKIP', { mint, reason: 'reserve_check_failed' });
+            return;
+          }
+
           const entryAmt = Math.max(psCfg.entryAmountSol * entryMultiplier, config.strategy.minEntryAmountSol);
           const mintPub = new PublicKey(mint);
           const txId = await buyTokenPumpSwap(this.connection, mintPub, this.payer, entryAmt, psCfg.slippageBps);
@@ -6862,6 +6902,19 @@ export class Sniper extends EventEmitter {
       }
     } catch (err) {
       logger.warn(`Failed to read partial sell TX for ${mintStr.slice(0,8)}: ${err}`);
+    }
+
+    // ── HONEYPOT GUARD: confirmed TX но 0 SOL получено ──
+    // Пул принял токены но не вернул SOL (sell-tax 100% / fake reserves / honeypot CPI).
+    // НЕ уменьшаем position.amount, блокируем mint и прерываем партиалы.
+    // Дальнейшие действия — full-sell цикл попробует Jupiter rescue.
+    if (solReceived === 0) {
+      logger.warn(`🚨 PARTIAL SELL HONEYPOT: ${mintStr.slice(0,8)} confirmed TX вернула 0 SOL — токены потеряны, блокируем дальнейшие партиалы`);
+      logEvent('PARTIAL_SELL_HONEYPOT', { mint: mintStr, txId, portion: decision.portion, reason: decision.reason });
+      this.failedSellMints.set(mintStr, Date.now());
+      // Помечаем позицию: отключить TP-партиалы, при следующем тике выйдет full-sell через Jupiter rescue
+      (position as any).honeypotDetected = true;
+      return;
     }
 
     if (decision.tpLevelPercent) {

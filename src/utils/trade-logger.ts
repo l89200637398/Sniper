@@ -90,6 +90,7 @@ export type CloseReason =
   | 'dead_volume'
   | 'whale_sell'
   | 'reserve_imbalance'
+  | 'price_anomaly'    // honeypot/sломанный price feed (PnL > 100k% или PARTIAL вернул 0 SOL)
   | 'unknown';
 
 export interface TradeClosePayload {

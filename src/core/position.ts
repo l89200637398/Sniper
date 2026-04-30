@@ -34,7 +34,8 @@ export interface SellDecision {
     | 'early_exit'
     | 'dead_volume'
     | 'whale_sell'
-    | 'reserve_imbalance';
+    | 'reserve_imbalance'
+    | 'price_anomaly';
   portion?: number;
   tpLevelPercent?: number;
   urgent?: boolean;
@@ -223,6 +224,29 @@ export class Position {
   shouldSell(logger: any = globalLogger): SellDecision {
     const now = Date.now();
     const exitRaw = this.getExitConfig() as any;
+
+    // ── HONEYPOT / PRICE-ANOMALY SHIELD ──
+    // (1) honeypot уже зафиксирован партиалом с solReceived=0 — выходим полностью.
+    // (2) безумный PnL (>100,000% или <-99% сразу после открытия) = сломанный price feed.
+    //     Не доверяем числам, не триггерим TP-лесенку, дампим всё через стандартный full-sell.
+    const honeypot = (this as any).honeypotDetected === true;
+    const insanePnl = Number.isFinite(this.pnlPercent) &&
+      (this.pnlPercent > 100_000 || (this.pnlPercent < -99 && (now - this.openedAt) < 30_000));
+    if (honeypot || insanePnl) {
+      const mintShort = this.mint.toBase58().slice(0, 8);
+      logger.warn(`[${mintShort}] price_anomaly: honeypot=${honeypot}, pnl=${this.pnlPercent}%, age=${now - this.openedAt}ms`);
+      logEvent('SHOULD_SELL_TRIGGER', {
+        mint: mintShort,
+        reason: 'price_anomaly',
+        honeypot,
+        insanePnl,
+        pnlPercent: this.pnlPercent,
+        protocol: this.protocol,
+        age: now - this.openedAt,
+      });
+      return { action: 'full', reason: 'price_anomaly', urgent: true };
+    }
+
     // Runner tail overrides: расширенные пороги для монстр-ранеров.
     const effHardStopPercent = this.runnerTailActivated && typeof exitRaw.runnerHardStopPercent === 'number'
       ? exitRaw.runnerHardStopPercent : exitRaw.hardStopPercent;
