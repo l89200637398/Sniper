@@ -33,6 +33,8 @@ import { sellTokenAuto } from '../src/core/sell-engine';
 import { sellTokenJupiter, jupiterBase } from '../src/trading/jupiter-sell';
 import { detectProtocol } from '../src/core/detector';
 import { updateMintState } from '../src/core/state-cache';
+import { startBlockhashCache } from '../src/infra/blockhash-cache';
+import { startPriorityFeeCache } from '../src/infra/priority-fee-cache';
 
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
 const DRY_RUN         = process.argv.includes('--dry-run');
@@ -106,6 +108,10 @@ async function main() {
   const connection = new Connection(rpcUrl, 'confirmed');
   const payer      = Keypair.fromSecretKey(bs58.decode(privateKey));
   const owner      = payer.publicKey;
+
+  // sellTokenAuto (особенно CPMM/AMM v4 пути) требует blockhash cache.
+  startBlockhashCache(connection);
+  startPriorityFeeCache(connection);
 
   const hasJupiterKey = !!process.env.JUPITER_API_KEY;
 
